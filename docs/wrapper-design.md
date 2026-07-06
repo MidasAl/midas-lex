@@ -1,0 +1,28 @@
+wrapper design
+
+- source boundary
+  - this tree contains the public wrapper source
+  - it does not contain private Midas Lex source or guidance data
+  - the real Midas Lex binary is a release asset
+- command path
+  - `midas-lex` is the only user command
+  - `midas-lex +v0.0.1 ...` selects an exact installed or downloadable release
+  - all other arguments are passed to the real binary unchanged
+  - environment variables are inherited by the real binary
+- install path
+  - `MIDAS_LEX_HOME` overrides storage
+  - default storage is `$HOME/.midas-lex/verus`
+  - real binaries live under `toolchains/VERSION/TARGET/`
+  - checksum records live under `checksums/VERSION/`
+- release lookup
+  - the wrapper reads GitHub releases from `MidasAl/midas-lex`
+  - default runs use the latest installed local release
+  - first runs download the latest release before dispatch
+  - background checks download a newer latest release for the next invocation
+- update timer
+  - update checks are throttled by a stamp file in the system temp directory
+  - the interval is 30 minutes per platform
+- integrity
+  - each binary asset has a same-name `.sha256` asset
+  - checksum mismatch stops installation
+  - partially downloaded files are never executed
