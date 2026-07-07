@@ -71,7 +71,7 @@ The supported targets are:
 
 The crates.io package and `cargo install midas-lex` download only this wrapper. The
 wrapper downloads and stores the proprietary Midas Lex binary when users invoke
-`midas-lex`. Use of the Midas Lex binary is governed by the EULA available through
+`midas-lex`. By using this CLI, users agree to the EULA available through
 `midas-lex eula`.
 
 ## Licenses
