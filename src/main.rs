@@ -273,7 +273,7 @@ fn parse_version_selector(
 
 fn normalize_version_tag(raw: &str) -> MidasLexResult<String> {
     if raw.is_empty() {
-        return Err(error("version selector must look like +v0.0.1"));
+        return Err(error("version selector must look like +v0.0.1-alpha.1"));
     }
     let tag = if raw.starts_with('v') {
         raw.to_string()
@@ -534,6 +534,8 @@ impl Drop for InstallLock {
 #[derive(Clone, Debug, Deserialize)]
 struct Release {
     tag_name: String,
+    #[serde(default)]
+    draft: bool,
     assets: Vec<ReleaseAsset>,
 }
 
@@ -559,18 +561,37 @@ impl ReleaseClient {
     }
 
     fn latest_release(&self) -> MidasLexResult<Release> {
-        self.fetch("releases/latest")
+        let body = self.fetch_text("releases?per_page=100")?;
+        latest_semver_release(serde_json::from_str(&body)?)
     }
 
     fn release_for_tag(&self, tag: &str) -> MidasLexResult<Release> {
-        self.fetch(&format!("releases/tags/{tag}"))
-    }
-
-    fn fetch(&self, path: &str) -> MidasLexResult<Release> {
-        let url = format!("https://api.github.com/repos/{}/{path}", self.repo);
-        let body = http_get_text(&url, MAX_TEXT_BYTES)?;
+        let body = self.fetch_text(&format!("releases/tags/{tag}"))?;
         Ok(serde_json::from_str(&body)?)
     }
+
+    fn fetch_text(&self, path: &str) -> MidasLexResult<String> {
+        let url = format!("https://api.github.com/repos/{}/{path}", self.repo);
+        http_get_text(&url, MAX_TEXT_BYTES)
+    }
+}
+
+fn latest_semver_release(releases: Vec<Release>) -> MidasLexResult<Release> {
+    let mut best: Option<(Version, Release)> = None;
+    for release in releases {
+        if release.draft {
+            continue;
+        }
+        let Ok(version) = parse_tag_version(&release.tag_name) else {
+            continue;
+        };
+        match &best {
+            Some((best_version, _)) if version <= *best_version => {}
+            _ => best = Some((version, release)),
+        }
+    }
+    best.map(|(_, release)| release)
+        .ok_or_else(|| error("no semver Midas Lex releases found"))
 }
 
 fn http_get_text(url: &str, max_bytes: u64) -> MidasLexResult<String> {
@@ -814,23 +835,32 @@ mod tests {
     #[test]
     fn parses_plus_version_selector() {
         let args = vec![
-            OsString::from("+v0.0.1"),
+            OsString::from("+v0.0.1-alpha.1"),
             OsString::from("docs"),
-            OsString::from("--json"),
+            OsString::from("read"),
+            OsString::from("helper_step_protocol"),
         ];
         let (selector, remaining) = parse_version_selector(args).unwrap();
         let selector = selector.unwrap();
-        assert_eq!(selector.tag, "v0.0.1");
-        assert_eq!(selector.version, Version::parse("0.0.1").unwrap());
+        assert_eq!(selector.tag, "v0.0.1-alpha.1");
+        assert_eq!(selector.version, Version::parse("0.0.1-alpha.1").unwrap());
         assert_eq!(
             remaining,
-            vec![OsString::from("docs"), OsString::from("--json")]
+            vec![
+                OsString::from("docs"),
+                OsString::from("read"),
+                OsString::from("helper_step_protocol")
+            ]
         );
     }
 
     #[test]
     fn keeps_normal_args_unchanged() {
-        let args = vec![OsString::from("docs"), OsString::from("--json")];
+        let args = vec![
+            OsString::from("docs"),
+            OsString::from("read"),
+            OsString::from("helper_step_protocol"),
+        ];
         let (selector, remaining) = parse_version_selector(args.clone()).unwrap();
         assert!(selector.is_none());
         assert_eq!(remaining, args);
@@ -902,19 +932,19 @@ mod tests {
     fn formats_asset_names() {
         let target = test_target();
         assert_eq!(
-            target.asset_name("v0.0.1"),
-            "midas-lex-v0.0.1-x86_64-unknown-linux-musl"
+            target.asset_name("v0.0.1-alpha.1"),
+            "midas-lex-v0.0.1-alpha.1-x86_64-unknown-linux-musl"
         );
         assert_eq!(
-            target.checksum_asset_name("v0.0.1"),
-            "midas-lex-v0.0.1-x86_64-unknown-linux-musl.sha256"
+            target.checksum_asset_name("v0.0.1-alpha.1"),
+            "midas-lex-v0.0.1-alpha.1-x86_64-unknown-linux-musl.sha256"
         );
     }
 
     #[test]
     fn parses_checksum_prefix() {
         let checksum = "A".repeat(64);
-        let text = format!("{checksum}  midas-lex-v0.0.1-x86_64-unknown-linux-musl\n");
+        let text = format!("{checksum}  midas-lex-v0.0.1-alpha.1-x86_64-unknown-linux-musl\n");
         assert_eq!(parse_checksum(&text).unwrap(), "a".repeat(64));
     }
 
@@ -935,7 +965,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = InstallStore::new(dir.path().to_path_buf());
         let target = test_target();
-        let bin = store.bin_path("v0.0.1", &target);
+        let bin = store.bin_path("v0.0.1-alpha.1", &target);
         fs::create_dir_all(bin.parent().unwrap()).unwrap();
         fs::write(bin, b"unchecked").unwrap();
         assert!(store.latest_installed(&target).unwrap().is_none());
@@ -974,10 +1004,10 @@ mod tests {
         let source_dir = tempfile::tempdir().unwrap();
         let binary_path = source_dir
             .path()
-            .join("midas-lex-v0.0.1-x86_64-unknown-linux-musl");
+            .join("midas-lex-v0.0.1-alpha.1-x86_64-unknown-linux-musl");
         let checksum_path = source_dir
             .path()
-            .join("midas-lex-v0.0.1-x86_64-unknown-linux-musl.sha256");
+            .join("midas-lex-v0.0.1-alpha.1-x86_64-unknown-linux-musl.sha256");
         fs::write(&binary_path, b"fake binary").unwrap();
         fs::write(
             &checksum_path,
@@ -989,14 +1019,15 @@ mod tests {
         )
         .unwrap();
         let release = Release {
-            tag_name: "v0.0.1".to_string(),
+            tag_name: "v0.0.1-alpha.1".to_string(),
+            draft: false,
             assets: vec![
                 ReleaseAsset {
-                    name: "midas-lex-v0.0.1-x86_64-unknown-linux-musl".to_string(),
+                    name: "midas-lex-v0.0.1-alpha.1-x86_64-unknown-linux-musl".to_string(),
                     browser_download_url: format!("file://{}", binary_path.display()),
                 },
                 ReleaseAsset {
-                    name: "midas-lex-v0.0.1-x86_64-unknown-linux-musl.sha256".to_string(),
+                    name: "midas-lex-v0.0.1-alpha.1-x86_64-unknown-linux-musl.sha256".to_string(),
                     browser_download_url: format!("file://{}", checksum_path.display()),
                 },
             ],
@@ -1007,21 +1038,33 @@ mod tests {
         assert_eq!(
             installed,
             dir.path()
-                .join("toolchains/v0.0.1/x86_64-unknown-linux-musl/midas-lex")
+                .join("toolchains/v0.0.1-alpha.1/x86_64-unknown-linux-musl/midas-lex")
         );
         assert_eq!(fs::read(&installed).unwrap(), b"fake binary");
         assert!(
             dir.path()
-                .join("checksums/v0.0.1/x86_64-unknown-linux-musl.sha256")
+                .join("checksums/v0.0.1-alpha.1/x86_64-unknown-linux-musl.sha256")
                 .is_file()
         );
         let record = fs::read_to_string(
             dir.path()
-                .join("checksums/v0.0.1/x86_64-unknown-linux-musl.sha256"),
+                .join("checksums/v0.0.1-alpha.1/x86_64-unknown-linux-musl.sha256"),
         )
         .unwrap();
         assert!(record.contains("asset_url: file://"));
         assert!(record.contains("checksum_url: file://"));
+    }
+
+    #[test]
+    fn latest_semver_release_includes_prereleases_and_skips_drafts() {
+        let latest = latest_semver_release(vec![
+            test_release("not-a-version", false),
+            test_release("v9.0.0", true),
+            test_release("v0.0.1-alpha.1", false),
+            test_release("v0.0.0", false),
+        ])
+        .unwrap();
+        assert_eq!(latest.tag_name, "v0.0.1-alpha.1");
     }
 
     #[test]
@@ -1150,5 +1193,13 @@ mod tests {
             ),
         )
         .unwrap();
+    }
+
+    fn test_release(tag: &str, draft: bool) -> Release {
+        Release {
+            tag_name: tag.to_string(),
+            draft,
+            assets: Vec::new(),
+        }
     }
 }

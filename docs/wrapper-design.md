@@ -6,7 +6,7 @@ wrapper design
   - the real Midas Lex binary is a release asset
 - command path
   - `midas-lex` is the only user command
-  - `midas-lex +v0.0.1 ...` selects an exact installed or downloadable release
+  - `midas-lex +v0.0.1-alpha.1 ...` selects an exact installed or downloadable release
   - all other arguments are passed to the real binary unchanged
   - environment variables are inherited by the real binary
 - install path
@@ -16,6 +16,8 @@ wrapper design
   - checksum records live under `checksums/VERSION/`
 - release lookup
   - the wrapper reads GitHub releases from `MidasAl/midas-lex`
+  - latest release selection includes prereleases and excludes drafts
+  - release tags are ordered as semantic versions
   - default runs use the latest installed local release
   - first runs download the latest release before dispatch
   - background checks download a newer latest release for the next invocation

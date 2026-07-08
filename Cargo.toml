@@ -1,6 +1,6 @@
 [package]
 name = "midas-lex"
-version = "0.0.1"
+version = "0.0.1-alpha.1"
 edition = "2024"
 license = "MPL-2.0"
 repository = "https://github.com/MidasAl/midas-lex"
@@ -12,6 +12,7 @@ include = [
     "LICENSES/**",
     "README.md",
     "docs/**",
+    "release-notes/**",
     "src/**",
 ]
 

@@ -33,7 +33,7 @@ checks are throttled to once every 30 minutes per platform.
 Use a version selector to run a specific release:
 
 ```sh
-midas-lex +v0.0.1 docs
+midas-lex +v0.0.1-alpha.1 docs
 ```
 
 The selector is consumed by the launcher, so the real Midas Lex binary receives
@@ -54,8 +54,8 @@ midas-lex-VERSION-TARGET.exe.sha256
 Examples:
 
 ```text
-midas-lex-v0.0.1-x86_64-unknown-linux-musl
-midas-lex-v0.0.1-x86_64-pc-windows-msvc.exe
+midas-lex-v0.0.1-alpha.1-x86_64-unknown-linux-musl
+midas-lex-v0.0.1-alpha.1-x86_64-pc-windows-msvc.exe
 ```
 
 The supported targets are:
@@ -66,6 +66,9 @@ The supported targets are:
 - `aarch64-apple-darwin`
 - `x86_64-pc-windows-msvc`
 - `aarch64-pc-windows-msvc`
+
+Release instructions are in `docs/release.md`. Release notes are committed under
+`release-notes/` and reused as the public GitHub Release notes.
 
 ## Download Notice
 
