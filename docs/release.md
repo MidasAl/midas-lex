@@ -20,7 +20,7 @@ CRATE_VERSION=${VERSION#v}
 Release notes live in this public repository under `release-notes/VERSION.md`.
 Write them after the private runtime build finishes. The notes are the public
 account of the private-built binary, so derive them from the private build
-results, generated checksums, and user-visible runtime changes.
+results, generated checksum files, and user-visible runtime changes.
 
 The same file is passed as the GitHub Release notes when creating or updating the
 draft release. Commit and push that file before uploading the draft. Keep private
@@ -31,11 +31,14 @@ Each release note should state:
 
 - the version and whether it is alpha, beta, or stable
 - the user-visible runtime changes
-- the supported target binaries attached to the GitHub Release
-- the SHA-256 checksums for the attached binaries
+- the supported targets attached to the GitHub Release
 - the wrapper crate version for this release
 - that using this CLI means agreeing to the EULA available through
   `midas-lex eula`
+
+Do not repeat attached artifact filenames or checksum values in the release
+body. GitHub Release assets include same-name `.sha256` files for checksum
+verification.
 
 ## Wrapper crate
 
