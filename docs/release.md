@@ -3,8 +3,8 @@
 Midas Lex has two public release surfaces:
 
 - the `midas-lex` wrapper crate on crates.io
-- private-built Midas Lex runtime binaries attached to a GitHub Release in this
-  public repository
+- locally private-built Midas Lex runtime binaries attached to a GitHub Release
+  in this public repository
 
 Use the same version for both surfaces. The first release line is an early alpha,
 for example `0.0.1-alpha.1` for Cargo and `v0.0.1-alpha.1` for GitHub. Semver
@@ -75,9 +75,12 @@ cargo publish --locked
 
 Create or update a draft GitHub Release in `MidasAl/midas-lex` using the same
 tag as the runtime assets, such as `v0.0.1-alpha.1`. Semver prerelease tags must
-be marked as GitHub prereleases. Attach the private-built runtime binaries and
-their same-name `.sha256` files. Use
+be marked as GitHub prereleases. Attach the locally private-built runtime
+binaries, public wrapper binaries, and their same-name `.sha256` files. Use
 `release-notes/VERSION.md` as the release notes body.
+
+GitHub is the publication surface only. Build release artifacts locally from the
+private checkout before creating or updating the draft release.
 
 After the wrapper checks and package dry run pass, create and push the public
 repository tag on the reviewed public wrapper commit before uploading the draft
