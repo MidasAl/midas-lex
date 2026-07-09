@@ -16,6 +16,8 @@ wrapper design
   - checksum records live under `checksums/VERSION/`
 - release lookup
   - the wrapper reads GitHub releases from `MidasAl/midas-lex`
+  - downloaded runtime assets are named
+    `midas-lex-private-VERSION-TARGET[.exe]`
   - latest release selection includes prereleases and excludes drafts
   - release tags are ordered as semantic versions
   - default runs use the latest installed local release

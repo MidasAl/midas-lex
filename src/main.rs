@@ -182,7 +182,11 @@ impl Target {
     }
 
     fn asset_name(&self, tag: &str) -> String {
-        format!("midas-lex-{tag}-{}{}", self.triple, self.exe_suffix())
+        format!(
+            "midas-lex-private-{tag}-{}{}",
+            self.triple,
+            self.exe_suffix()
+        )
     }
 
     fn checksum_asset_name(&self, tag: &str) -> String {
@@ -933,18 +937,19 @@ mod tests {
         let target = test_target();
         assert_eq!(
             target.asset_name("v0.0.1-alpha.1"),
-            "midas-lex-v0.0.1-alpha.1-x86_64-unknown-linux-musl"
+            "midas-lex-private-v0.0.1-alpha.1-x86_64-unknown-linux-musl"
         );
         assert_eq!(
             target.checksum_asset_name("v0.0.1-alpha.1"),
-            "midas-lex-v0.0.1-alpha.1-x86_64-unknown-linux-musl.sha256"
+            "midas-lex-private-v0.0.1-alpha.1-x86_64-unknown-linux-musl.sha256"
         );
     }
 
     #[test]
     fn parses_checksum_prefix() {
         let checksum = "A".repeat(64);
-        let text = format!("{checksum}  midas-lex-v0.0.1-alpha.1-x86_64-unknown-linux-musl\n");
+        let text =
+            format!("{checksum}  midas-lex-private-v0.0.1-alpha.1-x86_64-unknown-linux-musl\n");
         assert_eq!(parse_checksum(&text).unwrap(), "a".repeat(64));
     }
 
@@ -1004,10 +1009,10 @@ mod tests {
         let source_dir = tempfile::tempdir().unwrap();
         let binary_path = source_dir
             .path()
-            .join("midas-lex-v0.0.1-alpha.1-x86_64-unknown-linux-musl");
+            .join("midas-lex-private-v0.0.1-alpha.1-x86_64-unknown-linux-musl");
         let checksum_path = source_dir
             .path()
-            .join("midas-lex-v0.0.1-alpha.1-x86_64-unknown-linux-musl.sha256");
+            .join("midas-lex-private-v0.0.1-alpha.1-x86_64-unknown-linux-musl.sha256");
         fs::write(&binary_path, b"fake binary").unwrap();
         fs::write(
             &checksum_path,
@@ -1023,11 +1028,12 @@ mod tests {
             draft: false,
             assets: vec![
                 ReleaseAsset {
-                    name: "midas-lex-v0.0.1-alpha.1-x86_64-unknown-linux-musl".to_string(),
+                    name: "midas-lex-private-v0.0.1-alpha.1-x86_64-unknown-linux-musl".to_string(),
                     browser_download_url: format!("file://{}", binary_path.display()),
                 },
                 ReleaseAsset {
-                    name: "midas-lex-v0.0.1-alpha.1-x86_64-unknown-linux-musl.sha256".to_string(),
+                    name: "midas-lex-private-v0.0.1-alpha.1-x86_64-unknown-linux-musl.sha256"
+                        .to_string(),
                     browser_download_url: format!("file://{}", checksum_path.display()),
                 },
             ],

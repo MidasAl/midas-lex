@@ -42,20 +42,21 @@ real binary.
 
 ## Releases
 
-Midas Lex release assets use this pattern:
+The wrapper downloads private runtime assets from GitHub Releases using this
+pattern:
 
 ```text
-midas-lex-VERSION-TARGET
-midas-lex-VERSION-TARGET.exe
-midas-lex-VERSION-TARGET.sha256
-midas-lex-VERSION-TARGET.exe.sha256
+midas-lex-private-VERSION-TARGET
+midas-lex-private-VERSION-TARGET.exe
+midas-lex-private-VERSION-TARGET.sha256
+midas-lex-private-VERSION-TARGET.exe.sha256
 ```
 
 Examples:
 
 ```text
-midas-lex-v0.0.1-alpha.1-x86_64-unknown-linux-musl
-midas-lex-v0.0.1-alpha.1-x86_64-pc-windows-msvc.exe
+midas-lex-private-v0.0.1-alpha.1-x86_64-unknown-linux-musl
+midas-lex-private-v0.0.1-alpha.1-x86_64-pc-windows-msvc.exe
 ```
 
 The supported targets are:
