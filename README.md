@@ -42,8 +42,7 @@ real binary.
 
 ## Releases
 
-The wrapper downloads private runtime assets from GitHub Releases using this
-pattern:
+The wrapper downloads runtime assets from GitHub Releases using this pattern:
 
 ```text
 midas-lex-private-VERSION-TARGET
@@ -68,8 +67,8 @@ The supported targets are:
 - `x86_64-pc-windows-msvc`
 - `aarch64-pc-windows-msvc`
 
-Release instructions are in `docs/release.md`. Release notes are committed under
-`release-notes/` and reused as the public GitHub Release notes.
+See `docs/release.md` for how wrapper releases and runtime downloads work.
+Release notes are committed under `release-notes/`.
 
 ## Download Notice
 

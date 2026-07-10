@@ -1,12 +1,10 @@
-# Release notes
+# Midas Lex release notes
 
-Each Midas Lex release keeps its public notes in this directory as
-`release-notes/VERSION.md`, where `VERSION` includes the leading `v`.
+This directory contains public release notes for Midas Lex versions.
 
-Write the file after the private runtime build completes. The notes must reflect
-the private-built runtime binary through public facts: user-visible behavior,
-supported targets, wrapper crate version, and the EULA notice. Do not repeat
-attached artifact filenames or checksum values in the release body; those details
-live in the GitHub Release assets and same-name `.sha256` files.
+Each version uses a file named `release-notes/VERSION.md`, where `VERSION`
+includes the leading `v`, such as `release-notes/v0.0.1-alpha.1.md`.
 
-Use the same file as the body for the public GitHub Release.
+Release notes describe user-visible changes, supported platforms, and any
+release-specific notices. GitHub Release assets include same-name `.sha256`
+files for checksum verification.
