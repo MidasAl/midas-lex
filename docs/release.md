@@ -14,27 +14,25 @@ If `MIDAS_LEX_HOME` is not set, the default storage directory is
 
 ## Version selection
 
-By default, `midas-lex` uses the newest installed runtime binary. If no runtime
-binary is installed yet, it downloads the newest published semver GitHub Release
-and requires that release to include an asset for your platform.
+By default, `midas-lex` uses the newest installed ordinary runtime binary. If no
+ordinary runtime binary is installed yet, it downloads the newest published
+ordinary semver GitHub Release and requires that release to include an asset for
+your platform. GitHub pre-releases, semver pre-release tags, and draft GitHub
+Releases are not selected by default.
 
-A version selector runs a specific release:
+A version selector opts in to a specific release, including a pre-release:
 
 ```sh
 midas-lex +v0.0.1-alpha.1 docs
 ```
 
-Prerelease versions, such as alpha releases, can be selected and can be the
-newest downloadable release. Draft GitHub Releases are not visible to normal
-wrapper downloads.
-
 ## Background updates
 
 After starting the installed runtime binary, the wrapper may check for a newer
-published release in the background. Background checks are throttled to once
-every 30 minutes per platform.
+ordinary release in the background. Background checks are throttled to once every
+30 minutes per platform.
 
-If a newer published release is available, the wrapper downloads and verifies it
+If a newer ordinary release is available, the wrapper downloads and verifies it
 for the next invocation. The running command keeps using the binary it already
 started.
 

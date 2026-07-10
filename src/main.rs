@@ -373,6 +373,16 @@ impl InstallStore {
             let Ok(version) = parse_tag_version(&tag) else {
                 continue;
             };
+            if is_pre_release(&version) {
+                continue;
+            }
+            let checksum_record = match fs::read_to_string(self.checksum_path(&tag, target)) {
+                Ok(record) => record,
+                Err(_) => continue,
+            };
+            if checksum_record_is_pre_release(&checksum_record) {
+                continue;
+            }
             if let Some(bin_path) = self.verified_bin(&tag, target)? {
                 versions.push(InstalledVersion {
                     tag,
@@ -499,8 +509,8 @@ impl InstallStore {
         let dir = self.root.join("checksums").join(&release.tag_name);
         fs::create_dir_all(&dir)?;
         let body = format!(
-            "{checksum}  {asset_name}\nversion: {}\ntarget: {}\nasset_url: {}\nchecksum_url: {}\n",
-            release.tag_name, target.triple, asset_url, checksum_url
+            "{checksum}  {asset_name}\nversion: {}\ntarget: {}\npre_release: {}\nasset_url: {}\nchecksum_url: {}\n",
+            release.tag_name, target.triple, release.prerelease, asset_url, checksum_url
         );
         fs::write(dir.join(format!("{}.sha256", target.triple)), body)?;
         Ok(())
@@ -540,6 +550,8 @@ struct Release {
     tag_name: String,
     #[serde(default)]
     draft: bool,
+    #[serde(default)]
+    prerelease: bool,
     assets: Vec<ReleaseAsset>,
 }
 
@@ -583,19 +595,29 @@ impl ReleaseClient {
 fn latest_semver_release(releases: Vec<Release>) -> MidasLexResult<Release> {
     let mut best: Option<(Version, Release)> = None;
     for release in releases {
-        if release.draft {
+        if release.draft || release.prerelease {
             continue;
         }
         let Ok(version) = parse_tag_version(&release.tag_name) else {
             continue;
         };
+        if is_pre_release(&version) {
+            continue;
+        }
         match &best {
             Some((best_version, _)) if version <= *best_version => {}
             _ => best = Some((version, release)),
         }
     }
-    best.map(|(_, release)| release)
-        .ok_or_else(|| error("no semver Midas Lex releases found"))
+    best.map(|(_, release)| release).ok_or_else(|| {
+        error(
+            "no ordinary semver Midas Lex releases found; use +VERSION to opt in to a pre-release",
+        )
+    })
+}
+
+fn is_pre_release(version: &Version) -> bool {
+    !version.pre.is_empty()
 }
 
 fn http_get_text(url: &str, max_bytes: u64) -> MidasLexResult<String> {
@@ -657,6 +679,10 @@ fn parse_checksum(text: &str) -> MidasLexResult<String> {
         ));
     }
     Ok(token)
+}
+
+fn checksum_record_is_pre_release(text: &str) -> bool {
+    text.lines().any(|line| line.trim() == "pre_release: true")
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -954,15 +980,48 @@ mod tests {
     }
 
     #[test]
-    fn latest_installed_uses_semver_order() {
+    fn latest_installed_uses_ordinary_semver_order() {
         let dir = tempfile::tempdir().unwrap();
         let store = InstallStore::new(dir.path().to_path_buf());
         let target = test_target();
-        for tag in ["v0.9.0", "v0.10.0"] {
+        for tag in ["v0.9.0", "v0.10.0-alpha.1", "v0.10.0"] {
             write_cached_install(&store, &target, tag, tag.as_bytes(), tag.as_bytes());
         }
         let latest = store.latest_installed(&target).unwrap().unwrap();
         assert_eq!(latest.tag, "v0.10.0");
+    }
+
+    #[test]
+    fn latest_installed_ignores_pre_releases_by_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = InstallStore::new(dir.path().to_path_buf());
+        let target = test_target();
+        write_cached_install(
+            &store,
+            &target,
+            "v0.10.0-alpha.1",
+            b"valid-pre",
+            b"valid-pre",
+        );
+        assert!(store.latest_installed(&target).unwrap().is_none());
+    }
+
+    #[test]
+    fn latest_installed_ignores_cached_github_pre_releases_by_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = InstallStore::new(dir.path().to_path_buf());
+        let target = test_target();
+        write_cached_install(&store, &target, "v0.9.0", b"valid-old", b"valid-old");
+        write_cached_install_with_pre_release(
+            &store,
+            &target,
+            "v1.0.0",
+            b"valid-pre",
+            b"valid-pre",
+            true,
+        );
+        let latest = store.latest_installed(&target).unwrap().unwrap();
+        assert_eq!(latest.tag, "v0.9.0");
     }
 
     #[test]
@@ -1026,6 +1085,7 @@ mod tests {
         let release = Release {
             tag_name: "v0.0.1-alpha.1".to_string(),
             draft: false,
+            prerelease: true,
             assets: vec![
                 ReleaseAsset {
                     name: "midas-lex-private-v0.0.1-alpha.1-x86_64-unknown-linux-musl".to_string(),
@@ -1057,12 +1117,13 @@ mod tests {
                 .join("checksums/v0.0.1-alpha.1/x86_64-unknown-linux-musl.sha256"),
         )
         .unwrap();
+        assert!(record.contains("pre_release: true"));
         assert!(record.contains("asset_url: file://"));
         assert!(record.contains("checksum_url: file://"));
     }
 
     #[test]
-    fn latest_semver_release_includes_prereleases_and_skips_drafts() {
+    fn latest_semver_release_skips_pre_releases_and_drafts() {
         let latest = latest_semver_release(vec![
             test_release("not-a-version", false),
             test_release("v9.0.0", true),
@@ -1070,7 +1131,28 @@ mod tests {
             test_release("v0.0.0", false),
         ])
         .unwrap();
-        assert_eq!(latest.tag_name, "v0.0.1-alpha.1");
+        assert_eq!(latest.tag_name, "v0.0.0");
+    }
+
+    #[test]
+    fn latest_semver_release_skips_github_pre_releases_with_ordinary_tags() {
+        let latest = latest_semver_release(vec![
+            test_release("v0.9.0", false),
+            test_pre_release("v1.0.0"),
+        ])
+        .unwrap();
+        assert_eq!(latest.tag_name, "v0.9.0");
+    }
+
+    #[test]
+    fn latest_semver_release_errors_when_only_pre_releases_exist() {
+        let err = latest_semver_release(vec![
+            test_release("not-a-version", false),
+            test_release("v9.0.0", true),
+            test_release("v0.0.1-alpha.1", false),
+        ])
+        .unwrap_err();
+        assert!(err.to_string().contains("use +VERSION"));
     }
 
     #[test]
@@ -1185,6 +1267,17 @@ mod tests {
         binary: &[u8],
         checksum_source: &[u8],
     ) {
+        write_cached_install_with_pre_release(store, target, tag, binary, checksum_source, false);
+    }
+
+    fn write_cached_install_with_pre_release(
+        store: &InstallStore,
+        target: &Target,
+        tag: &str,
+        binary: &[u8],
+        checksum_source: &[u8],
+        pre_release: bool,
+    ) {
         let bin = store.bin_path(tag, target);
         fs::create_dir_all(bin.parent().unwrap()).unwrap();
         fs::write(&bin, binary).unwrap();
@@ -1193,9 +1286,10 @@ mod tests {
         fs::write(
             checksum_path,
             format!(
-                "{}  {}\n",
+                "{}  {}\npre_release: {}\n",
                 sha256_hex(checksum_source),
-                target.asset_name(tag)
+                target.asset_name(tag),
+                pre_release
             ),
         )
         .unwrap();
@@ -1205,6 +1299,16 @@ mod tests {
         Release {
             tag_name: tag.to_string(),
             draft,
+            prerelease: false,
+            assets: Vec::new(),
+        }
+    }
+
+    fn test_pre_release(tag: &str) -> Release {
+        Release {
+            tag_name: tag.to_string(),
+            draft: false,
+            prerelease: true,
             assets: Vec::new(),
         }
     }

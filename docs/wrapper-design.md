@@ -7,6 +7,7 @@ wrapper design
 - command path
   - `midas-lex` is the only user command
   - `midas-lex +v0.0.1-alpha.1 ...` selects an exact installed or downloadable release
+  - explicit `+VERSION` selection is the only pre-release opt-in path
   - all other arguments are passed to the real binary unchanged
   - environment variables are inherited by the real binary
 - install path
@@ -18,11 +19,11 @@ wrapper design
   - the wrapper reads GitHub releases from `MidasAl/midas-lex`
   - downloaded runtime assets are named
     `midas-lex-private-VERSION-TARGET[.exe]`
-  - latest release selection includes prereleases and excludes drafts
+  - latest release selection uses ordinary releases and excludes pre-releases and drafts
   - release tags are ordered as semantic versions
-  - default runs use the latest installed local release
-  - first runs download the latest release before dispatch
-  - background checks download a newer latest release for the next invocation
+  - default runs use the latest installed local ordinary release
+  - first runs download the latest ordinary release before dispatch
+  - background checks download a newer latest ordinary release for the next invocation
 - update timer
   - update checks are throttled by a stamp file in the system temp directory
   - the interval is 30 minutes per platform

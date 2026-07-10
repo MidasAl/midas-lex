@@ -26,11 +26,12 @@ The first run downloads the Midas Lex binary for your platform, verifies the
 published SHA-256 checksum, stores the binary under `MIDAS_LEX_HOME`, and then starts
 it. If `MIDAS_LEX_HOME` is not set, Midas Lex uses `$HOME/.midas-lex/verus`.
 
-Normal invocations use the latest installed Midas Lex version. After starting
-that binary, `midas-lex` may check for a newer release in the background. Background
-checks are throttled to once every 30 minutes per platform.
+Normal invocations use the latest installed ordinary Midas Lex version. After
+starting that binary, `midas-lex` may check for a newer ordinary release in the
+background. Background checks are throttled to once every 30 minutes per
+platform.
 
-Use a version selector to run a specific release:
+Use a version selector to opt in to a specific release, including a pre-release:
 
 ```sh
 midas-lex +v0.0.1-alpha.1 docs
