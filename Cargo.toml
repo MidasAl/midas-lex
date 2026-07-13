@@ -1,6 +1,6 @@
 [package]
 name = "midas-lex"
-version = "0.0.1-alpha.1"
+version = "0.0.1-beta.1"
 edition = "2024"
 license = "MPL-2.0"
 repository = "https://github.com/MidasAl/midas-lex"
@@ -17,6 +17,8 @@ include = [
 ]
 
 [dependencies]
+env_logger = "0.11"
+log = "0.4"
 semver = "1.0.28"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

@@ -7,26 +7,36 @@ wrapper design
 - command path
   - `midas-lex` is the only user command
   - `midas-lex +v0.0.1-alpha.1 ...` selects an exact installed or downloadable release
-  - explicit `+VERSION` selection is the only pre-release opt-in path
+  - `midas-lex +prerelease ...` selects the newest non-draft semver release, including pre-release tags
+  - explicit `+prerelease` selection is the only latest pre-release opt-in path
   - all other arguments are passed to the real binary unchanged
   - environment variables are inherited by the real binary
 - install path
-  - `MIDAS_LEX_HOME` overrides storage
-  - default storage is `$HOME/.midas-lex/verus`
+  - `MIDAS_LEX_VERUS_HOME` overrides storage
+  - `XDG_DATA_HOME` changes default storage to `$XDG_DATA_HOME/midas-lex/verus`
+  - fallback storage is `$HOME/.midas-lex/verus`
   - real binaries live under `toolchains/VERSION/TARGET/`
   - checksum records live under `checksums/VERSION/`
+  - install lock lives at `locks/install.lock`
+  - lock scope is one `MIDAS_LEX_VERUS_HOME` data directory
+- diagnostics
+  - default operational logs are hidden
+  - `MIDAS_LEX_VERUS_VERBOSE=1` logs the selected runtime tag and binary path
+  - `MIDAS_LEX_VERUS_LOG=info` logs download and update checks
 - release lookup
   - the wrapper reads GitHub releases from `MidasAl/midas-lex`
   - downloaded runtime assets are named
     `midas-lex-private-VERSION-TARGET[.exe]`
-  - latest release selection uses ordinary releases and excludes pre-releases and drafts
+  - latest release selection prefers stable releases
+  - latest release selection falls back to pre-releases when no stable release exists
+  - latest release selection excludes drafts
   - release tags are ordered as semantic versions
   - default runs use the latest installed local ordinary release
-  - first runs download the latest ordinary release before dispatch
-  - background checks download a newer latest ordinary release for the next invocation
+  - first runs download the latest stable release, or latest pre-release when no stable release exists
+  - background checks use the same stable-preferred release selection for the next invocation
 - update timer
   - update checks are throttled by a stamp file in the system temp directory
-  - the interval is 30 minutes per platform
+  - the interval is 1 hour per platform
 - integrity
   - each binary asset has a same-name `.sha256` asset
   - checksum mismatch stops installation

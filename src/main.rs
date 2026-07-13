@@ -14,18 +14,24 @@ use std::time::{Duration, SystemTime};
 type MidasLexResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 const DEFAULT_RELEASE_REPO: &str = "MidasAl/midas-lex";
-const DEFAULT_INSTALL_DIR: &str = ".midas-lex/verus";
-const BACKGROUND_UPDATE_EXE_ENV: &str = "MIDAS_LEX_WRAPPER_BACKGROUND_UPDATE_EXE";
-const BACKGROUND_UPDATE_MARKER_ENV: &str = "MIDAS_LEX_WRAPPER_BACKGROUND_UPDATE_MARKER";
-const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(30 * 60);
+const XDG_INSTALL_DIR: &str = "midas-lex/verus";
+const LEGACY_INSTALL_DIR: &str = ".midas-lex/verus";
+const INSTALL_HOME_ENV: &str = "MIDAS_LEX_VERUS_HOME";
+const RELEASE_REPO_ENV: &str = "MIDAS_LEX_VERUS_RELEASE_REPOSITORY";
+const VERBOSE_ENV: &str = "MIDAS_LEX_VERUS_VERBOSE";
+const LOG_ENV: &str = "MIDAS_LEX_VERUS_LOG";
+const BACKGROUND_UPDATE_EXE_ENV: &str = "MIDAS_LEX_VERUS_WRAPPER_BACKGROUND_UPDATE_EXE";
+const BACKGROUND_UPDATE_MARKER_ENV: &str = "MIDAS_LEX_VERUS_WRAPPER_BACKGROUND_UPDATE_MARKER";
+const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const MAX_BINARY_BYTES: u64 = 200 * 1024 * 1024;
 const MAX_TEXT_BYTES: u64 = 1024 * 1024;
 
 fn main() -> ExitCode {
+    init_logger();
     match run(env::args_os().skip(1).collect()) {
         Ok(code) => code,
         Err(err) => {
-            eprintln!("midas-lex: {err}");
+            log::error!("{err}");
             ExitCode::FAILURE
         }
     }
@@ -42,16 +48,25 @@ fn run(args: Vec<OsString>) -> MidasLexResult<ExitCode> {
     let (selector, real_args) = parse_version_selector(args)?;
     match selector {
         Some(selector) => {
-            let bin = install.ensure_version(&config, &target, &selector)?;
-            run_real_binary(&bin, real_args)
+            let selected = install.ensure_version(&config, &target, &selector)?;
+            log_dispatch(&config, &selected.tag, &selected.bin_path);
+            run_real_binary(&selected.bin_path, real_args)
         }
         None => match install.latest_installed(&target)? {
             Some(installed) => {
-                run_real_binary_with_background_update(&installed.bin_path, real_args, &target)
+                log_dispatch(&config, &installed.tag, &installed.bin_path);
+                run_real_binary_with_background_update(
+                    &installed.bin_path,
+                    real_args,
+                    &target,
+                    &config,
+                )
             }
             None => {
-                eprintln!("midas-lex: no installed Midas Lex binary; downloading latest release");
+                log::info!("no installed Midas Lex binary; downloading latest release");
                 let bin = install.install_latest(&config, &target)?;
+                let tag = bin_tag(&bin).unwrap_or_else(|| "unknown".to_string());
+                log_dispatch(&config, &tag, &bin);
                 run_real_binary(&bin, real_args)
             }
         },
@@ -66,11 +81,11 @@ fn run_background_update() {
         install.update_latest(&config, &target)
     })();
     if let Err(err) = result {
-        eprintln!("midas-lex: automatic update check failed: {err}");
+        log::warn!("automatic update check failed: {err}");
     }
 }
 
-fn maybe_spawn_background_update(target: &Target) -> MidasLexResult<()> {
+fn maybe_spawn_background_update(target: &Target, config: &Config) -> MidasLexResult<()> {
     let exe = env::current_exe()?;
     let stamp = update_stamp_path(target, &exe)?;
     if !claim_update_timer(&stamp)? {
@@ -82,8 +97,10 @@ fn maybe_spawn_background_update(target: &Target) -> MidasLexResult<()> {
         .create_new(true)
         .open(&marker)?;
     marker_file.write_all(sha256_file(&exe)?.as_bytes())?;
-    eprintln!("midas-lex: checking for Midas Lex updates in the background");
+    log::info!("checking for Midas Lex updates in the background");
     Command::new(&exe)
+        .env(INSTALL_HOME_ENV, config.install_home.as_os_str())
+        .env(RELEASE_REPO_ENV, &config.release_repo)
         .env(BACKGROUND_UPDATE_EXE_ENV, exe.as_os_str())
         .env(BACKGROUND_UPDATE_MARKER_ENV, marker.as_os_str())
         .stdin(Stdio::null())
@@ -133,13 +150,47 @@ fn run_real_binary_with_background_update(
     bin: &Path,
     args: Vec<OsString>,
     target: &Target,
+    config: &Config,
 ) -> MidasLexResult<ExitCode> {
     let mut child = Command::new(bin).args(args).spawn()?;
-    if let Err(err) = maybe_spawn_background_update(target) {
-        eprintln!("midas-lex: automatic update check could not start: {err}");
+    if let Err(err) = maybe_spawn_background_update(target, config) {
+        log::warn!("automatic update check could not start: {err}");
     }
     let status = child.wait()?;
     Ok(exit_code_from_status(status))
+}
+
+fn init_logger() {
+    let default_filter = if env_bool(VERBOSE_ENV) {
+        "info"
+    } else {
+        "warn"
+    };
+    let env = env_logger::Env::new().filter_or(LOG_ENV, default_filter);
+    let _ = env_logger::Builder::from_env(env)
+        .format_timestamp(None)
+        .format_target(false)
+        .try_init();
+}
+
+fn log_dispatch(config: &Config, tag: &str, bin: &Path) {
+    if config.verbose {
+        log::info!("running Midas Lex {tag} from {}", bin.display());
+    }
+}
+
+fn bin_tag(bin: &Path) -> Option<String> {
+    bin.parent()
+        .and_then(Path::parent)
+        .and_then(Path::file_name)
+        .map(|name| name.to_string_lossy().into_owned())
+}
+
+fn env_bool(name: &str) -> bool {
+    matches!(
+        env::var(name).as_deref(),
+        Ok("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON")
+    )
 }
 
 fn exit_code_from_status(status: std::process::ExitStatus) -> ExitCode {
@@ -153,19 +204,22 @@ fn exit_code_from_status(status: std::process::ExitStatus) -> ExitCode {
 struct Config {
     install_home: PathBuf,
     release_repo: String,
+    verbose: bool,
 }
 
 impl Config {
     fn from_env() -> MidasLexResult<Self> {
-        let install_home = match env::var_os("MIDAS_LEX_HOME") {
+        let install_home = match env::var_os(INSTALL_HOME_ENV) {
             Some(path) => PathBuf::from(path),
             None => default_install_home()?,
         };
-        let release_repo = env::var("MIDAS_LEX_RELEASE_REPOSITORY")
-            .unwrap_or_else(|_| DEFAULT_RELEASE_REPO.to_string());
+        let release_repo =
+            env::var(RELEASE_REPO_ENV).unwrap_or_else(|_| DEFAULT_RELEASE_REPO.to_string());
+        let verbose = env_bool(VERBOSE_ENV);
         Ok(Self {
             install_home,
             release_repo,
+            verbose,
         })
     }
 }
@@ -250,9 +304,9 @@ fn current_target() -> Option<Target> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct VersionSelector {
-    tag: String,
-    version: Version,
+enum VersionSelector {
+    Exact { tag: String, version: Version },
+    Prerelease,
 }
 
 fn parse_version_selector(
@@ -261,31 +315,28 @@ fn parse_version_selector(
     let Some(first) = args.first().and_then(|arg| arg.to_str()) else {
         return Ok((None, args));
     };
+    if first == "+prerelease" {
+        return Ok((
+            Some(VersionSelector::Prerelease),
+            args.into_iter().skip(1).collect(),
+        ));
+    }
     let Some(raw_version) = first.strip_prefix("+v") else {
         return Ok((None, args));
     };
-    if raw_version.is_empty() || Version::parse(raw_version).is_err() {
+    if raw_version.is_empty() {
         return Ok((None, args));
     }
-    let tag = normalize_version_tag(raw_version)?;
-    let version = parse_tag_version(&tag)?;
+    let Ok(version) = Version::parse(raw_version) else {
+        return Ok((None, args));
+    };
     Ok((
-        Some(VersionSelector { tag, version }),
+        Some(VersionSelector::Exact {
+            tag: first[1..].to_string(),
+            version,
+        }),
         args.into_iter().skip(1).collect(),
     ))
-}
-
-fn normalize_version_tag(raw: &str) -> MidasLexResult<String> {
-    if raw.is_empty() {
-        return Err(error("version selector must look like +v0.0.1-alpha.1"));
-    }
-    let tag = if raw.starts_with('v') {
-        raw.to_string()
-    } else {
-        format!("v{raw}")
-    };
-    parse_tag_version(&tag)?;
-    Ok(tag)
 }
 
 fn parse_tag_version(tag: &str) -> MidasLexResult<Version> {
@@ -315,20 +366,52 @@ impl InstallStore {
         config: &Config,
         target: &Target,
         selector: &VersionSelector,
-    ) -> MidasLexResult<PathBuf> {
-        if let Some(bin) = self.verified_bin(&selector.tag, target)? {
-            return Ok(bin);
+    ) -> MidasLexResult<InstalledVersion> {
+        match selector {
+            VersionSelector::Exact { tag, version } => {
+                if let Some(bin_path) = self.verified_bin(tag, target)? {
+                    return Ok(InstalledVersion {
+                        tag: tag.clone(),
+                        version: version.clone(),
+                        bin_path,
+                    });
+                }
+                log::info!("downloading Midas Lex {tag}");
+                let release =
+                    ReleaseClient::new(config.release_repo.clone()).release_for_tag(tag)?;
+                if parse_tag_version(&release.tag_name)? != *version {
+                    return Err(error(format!(
+                        "release tag {} did not match requested {}",
+                        release.tag_name, tag
+                    )));
+                }
+                let bin_path = self.install_release(&release, target)?;
+                Ok(InstalledVersion {
+                    tag: release.tag_name,
+                    version: version.clone(),
+                    bin_path,
+                })
+            }
+            VersionSelector::Prerelease => {
+                let release =
+                    ReleaseClient::new(config.release_repo.clone()).latest_prerelease()?;
+                let version = parse_tag_version(&release.tag_name)?;
+                if let Some(bin_path) = self.verified_bin(&release.tag_name, target)? {
+                    return Ok(InstalledVersion {
+                        tag: release.tag_name,
+                        version,
+                        bin_path,
+                    });
+                }
+                log::info!("downloading Midas Lex {}", release.tag_name);
+                let bin_path = self.install_release(&release, target)?;
+                Ok(InstalledVersion {
+                    tag: release.tag_name,
+                    version,
+                    bin_path,
+                })
+            }
         }
-        eprintln!("midas-lex: downloading Midas Lex {}", selector.tag);
-        let release =
-            ReleaseClient::new(config.release_repo.clone()).release_for_tag(&selector.tag)?;
-        if parse_tag_version(&release.tag_name)? != selector.version {
-            return Err(error(format!(
-                "release tag {} did not match requested {}",
-                release.tag_name, selector.tag
-            )));
-        }
-        self.install_release(&release, target)
     }
 
     fn install_latest(&self, config: &Config, target: &Target) -> MidasLexResult<PathBuf> {
@@ -343,18 +426,15 @@ impl InstallStore {
         let release = ReleaseClient::new(config.release_repo.clone()).latest_release()?;
         let remote_version = parse_tag_version(&release.tag_name)?;
         if remote_version <= current.version {
-            eprintln!("midas-lex: Midas Lex {} is already installed", current.tag);
+            log::info!("Midas Lex {} is already installed", current.tag);
             return Ok(());
         }
-        eprintln!(
-            "midas-lex: downloading Midas Lex {} for the next invocation",
+        log::info!(
+            "downloading Midas Lex {} for the next invocation",
             release.tag_name
         );
         let installed = self.install_release(&release, target)?;
-        eprintln!(
-            "midas-lex: installed Midas Lex update at {}",
-            installed.display()
-        );
+        log::info!("installed Midas Lex update at {}", installed.display());
         Ok(())
     }
 
@@ -363,7 +443,8 @@ impl InstallStore {
         if !dir.exists() {
             return Ok(None);
         }
-        let mut versions = Vec::new();
+        let mut stable_versions = Vec::new();
+        let mut pre_versions = Vec::new();
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
             if !entry.file_type()?.is_dir() {
@@ -373,26 +454,32 @@ impl InstallStore {
             let Ok(version) = parse_tag_version(&tag) else {
                 continue;
             };
-            if is_pre_release(&version) {
-                continue;
-            }
             let checksum_record = match fs::read_to_string(self.checksum_path(&tag, target)) {
                 Ok(record) => record,
                 Err(_) => continue,
             };
-            if checksum_record_is_pre_release(&checksum_record) {
-                continue;
-            }
             if let Some(bin_path) = self.verified_bin(&tag, target)? {
-                versions.push(InstalledVersion {
+                let installed = InstalledVersion {
                     tag,
                     version,
                     bin_path,
-                });
+                };
+                if is_pre_release(&installed.version)
+                    || checksum_record_is_pre_release(&checksum_record)
+                {
+                    pre_versions.push(installed);
+                } else {
+                    stable_versions.push(installed);
+                }
             }
         }
-        versions.sort_by(|left, right| left.version.cmp(&right.version));
-        Ok(versions.pop())
+        stable_versions.sort_by(|left, right| left.version.cmp(&right.version));
+        if stable_versions.is_empty() {
+            pre_versions.sort_by(|left, right| left.version.cmp(&right.version));
+            Ok(pre_versions.pop())
+        } else {
+            Ok(stable_versions.pop())
+        }
     }
 
     fn install_release(&self, release: &Release, target: &Target) -> MidasLexResult<PathBuf> {
@@ -446,9 +533,10 @@ impl InstallStore {
             &asset.browser_download_url,
             &checksum_asset.browser_download_url,
         )?;
-        eprintln!(
-            "midas-lex: installed Midas Lex {} for {}",
-            release.tag_name, target.triple
+        log::info!(
+            "installed Midas Lex {} for {}",
+            release.tag_name,
+            target.triple
         );
         Ok(bin)
     }
@@ -578,7 +666,15 @@ impl ReleaseClient {
 
     fn latest_release(&self) -> MidasLexResult<Release> {
         let body = self.fetch_text("releases?per_page=100")?;
-        latest_semver_release(serde_json::from_str(&body)?)
+        latest_semver_release(
+            serde_json::from_str(&body)?,
+            ReleaseMode::StableThenPrerelease,
+        )
+    }
+
+    fn latest_prerelease(&self) -> MidasLexResult<Release> {
+        let body = self.fetch_text("releases?per_page=100")?;
+        latest_semver_release(serde_json::from_str(&body)?, ReleaseMode::AllowPrerelease)
     }
 
     fn release_for_tag(&self, tag: &str) -> MidasLexResult<Release> {
@@ -592,28 +688,40 @@ impl ReleaseClient {
     }
 }
 
-fn latest_semver_release(releases: Vec<Release>) -> MidasLexResult<Release> {
-    let mut best: Option<(Version, Release)> = None;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReleaseMode {
+    StableThenPrerelease,
+    AllowPrerelease,
+}
+
+fn latest_semver_release(releases: Vec<Release>, mode: ReleaseMode) -> MidasLexResult<Release> {
+    let mut best_stable: Option<(Version, Release)> = None;
+    let mut best_any: Option<(Version, Release)> = None;
     for release in releases {
-        if release.draft || release.prerelease {
+        if release.draft {
             continue;
         }
         let Ok(version) = parse_tag_version(&release.tag_name) else {
             continue;
         };
-        if is_pre_release(&version) {
-            continue;
-        }
-        match &best {
-            Some((best_version, _)) if version <= *best_version => {}
-            _ => best = Some((version, release)),
+        update_best(&mut best_any, version.clone(), release.clone());
+        if !release.prerelease && !is_pre_release(&version) {
+            update_best(&mut best_stable, version, release);
         }
     }
-    best.map(|(_, release)| release).ok_or_else(|| {
-        error(
-            "no ordinary semver Midas Lex releases found; use +VERSION to opt in to a pre-release",
-        )
-    })
+    let best = match mode {
+        ReleaseMode::StableThenPrerelease => best_stable.or(best_any),
+        ReleaseMode::AllowPrerelease => best_any,
+    };
+    best.map(|(_, release)| release)
+        .ok_or_else(|| error("no semver Midas Lex releases found"))
+}
+
+fn update_best(best: &mut Option<(Version, Release)>, version: Version, release: Release) {
+    match best {
+        Some((best_version, _)) if version <= *best_version => {}
+        _ => *best = Some((version, release)),
+    }
 }
 
 fn is_pre_release(version: &Version) -> bool {
@@ -811,9 +919,38 @@ fn short_hash(bytes: &[u8]) -> String {
 }
 
 fn default_install_home() -> MidasLexResult<PathBuf> {
-    Ok(home_dir()?.join(DEFAULT_INSTALL_DIR))
+    default_install_home_from_env(env::var_os("XDG_DATA_HOME"), env::var_os("HOME"))
 }
 
+#[cfg(not(windows))]
+fn default_install_home_from_env(
+    xdg_data_home: Option<OsString>,
+    home: Option<OsString>,
+) -> MidasLexResult<PathBuf> {
+    if let Some(path) = xdg_data_home
+        && !path.is_empty()
+    {
+        return Ok(PathBuf::from(path).join(XDG_INSTALL_DIR));
+    }
+    if let Some(home) = home
+        && !home.is_empty()
+    {
+        return Ok(PathBuf::from(home).join(LEGACY_INSTALL_DIR));
+    }
+    Err(error(format!(
+        "cannot determine data directory; set {INSTALL_HOME_ENV}, XDG_DATA_HOME, or HOME"
+    )))
+}
+
+#[cfg(windows)]
+fn default_install_home_from_env(
+    _xdg_data_home: Option<OsString>,
+    _home: Option<OsString>,
+) -> MidasLexResult<PathBuf> {
+    Ok(home_dir()?.join(LEGACY_INSTALL_DIR))
+}
+
+#[cfg(windows)]
 fn home_dir() -> MidasLexResult<PathBuf> {
     if let Some(home) = env::var_os("HOME") {
         return Ok(PathBuf::from(home));
@@ -827,7 +964,9 @@ fn home_dir() -> MidasLexResult<PathBuf> {
             home.push(path);
             Ok(PathBuf::from(home))
         }
-        _ => Err(error("cannot determine home directory; set MIDAS_LEX_HOME")),
+        _ => Err(error(format!(
+            "cannot determine home directory; set {INSTALL_HOME_ENV}"
+        ))),
     }
 }
 
@@ -871,9 +1010,11 @@ mod tests {
             OsString::from("helper_step_protocol"),
         ];
         let (selector, remaining) = parse_version_selector(args).unwrap();
-        let selector = selector.unwrap();
-        assert_eq!(selector.tag, "v0.0.1-alpha.1");
-        assert_eq!(selector.version, Version::parse("0.0.1-alpha.1").unwrap());
+        let VersionSelector::Exact { tag, version } = selector.unwrap() else {
+            panic!("expected exact selector");
+        };
+        assert_eq!(tag, "v0.0.1-alpha.1");
+        assert_eq!(version, Version::parse("0.0.1-alpha.1").unwrap());
         assert_eq!(
             remaining,
             vec![
@@ -882,6 +1023,22 @@ mod tests {
                 OsString::from("helper_step_protocol")
             ]
         );
+    }
+
+    #[test]
+    fn keeps_plus_semver_selector_without_v_unchanged() {
+        let args = vec![OsString::from("+0.0.2"), OsString::from("docs")];
+        let (selector, remaining) = parse_version_selector(args.clone()).unwrap();
+        assert!(selector.is_none());
+        assert_eq!(remaining, args);
+    }
+
+    #[test]
+    fn parses_plus_prerelease_selector() {
+        let args = vec![OsString::from("+prerelease"), OsString::from("docs")];
+        let (selector, remaining) = parse_version_selector(args).unwrap();
+        assert_eq!(selector, Some(VersionSelector::Prerelease));
+        assert_eq!(remaining, vec![OsString::from("docs")]);
     }
 
     #[test]
@@ -905,13 +1062,11 @@ mod tests {
     }
 
     #[test]
-    fn keeps_invalid_plus_args_unchanged() {
-        for value in ["+", "+foo", "+vfoo"] {
-            let args = vec![OsString::from(value), OsString::from("docs")];
-            let (selector, remaining) = parse_version_selector(args.clone()).unwrap();
-            assert!(selector.is_none());
-            assert_eq!(remaining, args);
-        }
+    fn keeps_bare_plus_arg_unchanged() {
+        let args = vec![OsString::from("+"), OsString::from("docs")];
+        let (selector, remaining) = parse_version_selector(args.clone()).unwrap();
+        assert!(selector.is_none());
+        assert_eq!(remaining, args);
     }
 
     #[test]
@@ -992,7 +1147,7 @@ mod tests {
     }
 
     #[test]
-    fn latest_installed_ignores_pre_releases_by_default() {
+    fn latest_installed_falls_back_to_pre_releases() {
         let dir = tempfile::tempdir().unwrap();
         let store = InstallStore::new(dir.path().to_path_buf());
         let target = test_target();
@@ -1003,11 +1158,12 @@ mod tests {
             b"valid-pre",
             b"valid-pre",
         );
-        assert!(store.latest_installed(&target).unwrap().is_none());
+        let latest = store.latest_installed(&target).unwrap().unwrap();
+        assert_eq!(latest.tag, "v0.10.0-alpha.1");
     }
 
     #[test]
-    fn latest_installed_ignores_cached_github_pre_releases_by_default() {
+    fn latest_installed_prefers_stable_over_cached_github_pre_releases() {
         let dir = tempfile::tempdir().unwrap();
         let store = InstallStore::new(dir.path().to_path_buf());
         let target = test_target();
@@ -1022,6 +1178,23 @@ mod tests {
         );
         let latest = store.latest_installed(&target).unwrap().unwrap();
         assert_eq!(latest.tag, "v0.9.0");
+    }
+
+    #[test]
+    fn latest_installed_falls_back_to_cached_github_pre_releases() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = InstallStore::new(dir.path().to_path_buf());
+        let target = test_target();
+        write_cached_install_with_pre_release(
+            &store,
+            &target,
+            "v1.0.0",
+            b"valid-pre",
+            b"valid-pre",
+            true,
+        );
+        let latest = store.latest_installed(&target).unwrap().unwrap();
+        assert_eq!(latest.tag, "v1.0.0");
     }
 
     #[test]
@@ -1124,35 +1297,56 @@ mod tests {
 
     #[test]
     fn latest_semver_release_skips_pre_releases_and_drafts() {
-        let latest = latest_semver_release(vec![
-            test_release("not-a-version", false),
-            test_release("v9.0.0", true),
-            test_release("v0.0.1-alpha.1", false),
-            test_release("v0.0.0", false),
-        ])
+        let latest = latest_semver_release(
+            vec![
+                test_release("not-a-version", false),
+                test_release("v9.0.0", true),
+                test_release("v0.0.1-alpha.1", false),
+                test_release("v0.0.0", false),
+            ],
+            ReleaseMode::StableThenPrerelease,
+        )
         .unwrap();
         assert_eq!(latest.tag_name, "v0.0.0");
     }
 
     #[test]
     fn latest_semver_release_skips_github_pre_releases_with_ordinary_tags() {
-        let latest = latest_semver_release(vec![
-            test_release("v0.9.0", false),
-            test_pre_release("v1.0.0"),
-        ])
+        let latest = latest_semver_release(
+            vec![test_release("v0.9.0", false), test_pre_release("v1.0.0")],
+            ReleaseMode::StableThenPrerelease,
+        )
         .unwrap();
         assert_eq!(latest.tag_name, "v0.9.0");
     }
 
     #[test]
-    fn latest_semver_release_errors_when_only_pre_releases_exist() {
-        let err = latest_semver_release(vec![
-            test_release("not-a-version", false),
-            test_release("v9.0.0", true),
-            test_release("v0.0.1-alpha.1", false),
-        ])
-        .unwrap_err();
-        assert!(err.to_string().contains("use +VERSION"));
+    fn latest_semver_release_can_include_pre_releases() {
+        let latest = latest_semver_release(
+            vec![
+                test_release("v0.9.0", false),
+                test_release("v1.0.0-alpha.1", false),
+                test_pre_release("v1.0.0-beta.1"),
+            ],
+            ReleaseMode::AllowPrerelease,
+        )
+        .unwrap();
+        assert_eq!(latest.tag_name, "v1.0.0-beta.1");
+    }
+
+    #[test]
+    fn latest_semver_release_falls_back_to_pre_release() {
+        let latest = latest_semver_release(
+            vec![
+                test_release("not-a-version", false),
+                test_release("v9.0.0", true),
+                test_release("v0.0.1-alpha.1", false),
+                test_pre_release("v0.0.2-beta.1"),
+            ],
+            ReleaseMode::StableThenPrerelease,
+        )
+        .unwrap();
+        assert_eq!(latest.tag_name, "v0.0.2-beta.1");
     }
 
     #[test]
@@ -1198,6 +1392,24 @@ mod tests {
                 .to_string_lossy()
                 .contains(&short_hash(sha256_file(&exe).unwrap().as_bytes()))
         );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn default_install_home_uses_xdg_data_home() {
+        let path = default_install_home_from_env(
+            Some(OsString::from("/tmp/midas-xdg")),
+            Some(OsString::from("/tmp/home")),
+        )
+        .unwrap();
+        assert_eq!(path, Path::new("/tmp/midas-xdg").join("midas-lex/verus"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn default_install_home_falls_back_to_legacy_home_dir() {
+        let path = default_install_home_from_env(None, Some(OsString::from("/tmp/home"))).unwrap();
+        assert_eq!(path, Path::new("/tmp/home").join(".midas-lex/verus"));
     }
 
     #[cfg(unix)]
