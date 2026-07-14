@@ -14,6 +14,7 @@ use std::time::{Duration, SystemTime};
 type MidasLexResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 const DEFAULT_RELEASE_REPO: &str = "MidasAl/midas-lex";
+#[cfg(not(windows))]
 const XDG_INSTALL_DIR: &str = "midas-lex/verus";
 const LEGACY_INSTALL_DIR: &str = ".midas-lex/verus";
 const INSTALL_HOME_ENV: &str = "MIDAS_LEX_VERUS_HOME";
