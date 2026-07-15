@@ -6,6 +6,10 @@ wrapper design
   - the real Midas Lex binary is a release asset
 - command path
   - `midas-lex` is the only user command
+  - startup parses an optional leading selector, resolves the runtime, and passes every remaining argument unchanged
+  - with no selector, an installed verified runtime starts first; the wrapper then starts a separate background child for the throttled update check and waits for the runtime child
+  - the background child is marked with private environment variables and a one-use marker, performs the update check, logs failures as warnings, and exits without starting the runtime
+  - a first run with no installed runtime installs the selected latest release before starting it, so no background update child is needed for that invocation
   - `midas-lex +v0.0.1-alpha.1 ...` selects an exact installed or downloadable release
   - `midas-lex +prerelease ...` selects the newest non-draft semver release, including pre-release tags
   - explicit `+prerelease` selection is the only latest pre-release opt-in path
@@ -35,9 +39,15 @@ wrapper design
   - first runs download the latest stable release, or latest pre-release when no stable release exists
   - background checks use the same stable-preferred release selection for the next invocation
 - update timer
-  - update checks are throttled by a stamp file in the system temp directory
+  - update checks are throttled by a stamp file in a private per-user system-temp directory
   - the interval is 1 hour per platform
 - integrity
   - each binary asset has a same-name `.sha256` asset
   - checksum mismatch stops installation
   - partially downloaded files are never executed
+
+- safe local walkthrough
+  - `cargo test` exercises selector parsing, release ordering, data-directory selection, timer, marker, lock, and checksum behavior
+  - `cargo run -- help` checks the real wrapper command path and may download a runtime when none is installed
+  - `MIDAS_LEX_VERUS_HOME=/tmp/midas-lex-doc-check cargo run -- +v0.0.1-alpha.1 help` checks explicit-selector parsing but may download the named release
+  - do not use the selector walkthrough against a production data directory unless the download is intended

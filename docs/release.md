@@ -50,6 +50,21 @@ the active default data directory's `locks/install.lock` when
 `MIDAS_LEX_VERUS_HOME` is not set. Other wrapper processes using the same data
 directory wait for that lock before installing a runtime.
 
+The normal startup sequence is: resolve the installed verified runtime, start it,
+start a separate wrapper child for the throttled update check, and wait for the
+runtime child. The update child is identified by a private marker and exits after
+checking or installing a newer runtime; it never replaces the binary already
+running for the current command. When no verified runtime is installed, the
+wrapper installs the selected latest release synchronously and starts it without
+spawning that background child for the first invocation.
+
+`cargo test` covers the selector, release ordering, timer, marker, lock,
+data-directory, and checksum cases without downloading, publishing, or
+uploading a release. `cargo run -- help` exercises the real wrapper path and may
+download a runtime when none is installed. To test selector parsing with an
+isolated data directory, use `MIDAS_LEX_VERUS_HOME=/tmp/midas-lex-doc-check
+cargo run -- +v0.0.1-alpha.1 help`; that command may download the named release.
+
 ## Release assets
 
 Runtime assets use this pattern:
