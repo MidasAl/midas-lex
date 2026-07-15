@@ -34,44 +34,34 @@ non-draft semver release, including alpha, beta, and release-candidate tags.
 Set `MIDAS_LEX_VERUS_VERBOSE=1` to show the selected runtime version tag and
 binary path. Set `MIDAS_LEX_VERUS_LOG=info` to show download and update logs.
 
-## Wrapper self-update
-
-Run `midas-lex +self-update` to replace the installed public wrapper executable.
-Run `midas-lex +self-update --help` for the wrapper-owned command help. The
-leading `+self-update` token accepts no version selector or runtime arguments;
-all invocations without that exact leading token retain normal selector parsing
-and runtime pass-through.
-
-The command uses only the official `MidasAl/midas-lex` repository. Selection is
-the same stable-preferred policy as a default runtime download: the newest
-non-draft stable semver release, or the newest non-draft semver pre-release only
-when no stable release exists. A same or older wrapper version is left unchanged.
-The selected release must contain the public wrapper asset for the current target
-and a same-name `.sha256` file with exactly one valid entry naming that asset.
-
-Linux and macOS updates resolve the running executable directly instead of
-searching `PATH`. The replacement downloads beside that executable, remains
-unusable until its SHA-256 checksum is verified, inherits the existing executable
-mode, is synced, and replaces the old path by an atomic same-filesystem rename.
-An adjacent lock serializes concurrent commands. A waiter rechecks the executable
-before replacement and stops if another command changed it. Errors before rename
-remove the staged download and leave the old executable intact; permission errors
-identify the unwritable path and suggest `cargo install midas-lex --force`.
-
-Windows wrapper assets remain part of the six-target release set, but a running
-Windows `.exe` cannot be replaced safely in place. On Windows this command exits
-before downloading or changing a file and directs the user to run
-`cargo install midas-lex --force` after it exits.
-
 ## Background updates
 
-After starting the installed runtime binary, the wrapper may check for a newer
-ordinary release in the background. Background checks are throttled to once every
-hour per platform.
+On a default invocation with a verified runtime already installed, the wrapper
+starts that runtime before it may start a separate background child. Checks are
+throttled to once every hour per platform. The marked, one-use child performs one
+stable-preferred, non-draft semantic-version release lookup and uses that release
+for both wrapper and runtime checks. The running command keeps using the runtime
+it already started.
 
-If a newer stable release is available, or no stable release exists and a newer
-pre-release is available, the wrapper downloads and verifies it for the next
-invocation. The running command keeps using the binary it already started.
+The first invocation installs and starts the selected latest runtime without a
+background check. Explicit `+vVERSION` and `+prerelease` invocations also retain
+their direct behavior without an automatic check. No other leading `+` token is
+reserved by the wrapper: for example, `+self-update` passes to the runtime
+unchanged.
+
+Automatic wrapper replacement accepts assets only from the official
+`MidasAl/midas-lex` repository. A same or older wrapper version is left
+unchanged. Linux and macOS resolve the running executable instead of searching
+`PATH`, require the canonical public wrapper asset and its exact one-line
+same-name SHA-256 record, stage beside the executable, preserve its mode, sync,
+and atomically rename. An adjacent lock and executable digest rechecks serialize
+replacement; errors before rename remove staging and preserve the old wrapper.
+
+A running Windows `.exe` is not replaced. Windows continues the automatic
+runtime check and logs the wrapper skip at the opt-in information level; update
+the wrapper after Midas Lex exits with `cargo install midas-lex --force`.
+Wrapper or runtime update failures are warnings from the background child and do
+not change the current runtime command's result.
 
 Runtime downloads and installs use one lock per data directory. The lock file is
 `$MIDAS_LEX_VERUS_HOME/locks/install.lock`, or
@@ -79,20 +69,10 @@ the active default data directory's `locks/install.lock` when
 `MIDAS_LEX_VERUS_HOME` is not set. Other wrapper processes using the same data
 directory wait for that lock before installing a runtime.
 
-The normal startup sequence is: resolve the installed verified runtime, start it,
-start a separate wrapper child for the throttled update check, and wait for the
-runtime child. The update child is identified by a private marker and exits after
-checking or installing a newer runtime; it never replaces the binary already
-running for the current command. When no verified runtime is installed, the
-wrapper installs the selected latest release synchronously and starts it without
-spawning that background child for the first invocation.
-
-`cargo test` covers the selector, release ordering, timer, marker, lock,
-data-directory, and checksum cases without downloading, publishing, or
-uploading a release. `cargo run -- help` exercises the real wrapper path and may
-download a runtime when none is installed. To test selector parsing with an
-isolated data directory, use `MIDAS_LEX_VERUS_HOME=/tmp/midas-lex-doc-check
-cargo run -- +v0.0.1-alpha.1 help`; that command may download the named release.
+`cargo test` covers pass-through, first-run policy, release ordering, the timer,
+marker and locks, independent wrapper/runtime failures, checksum cleanup, atomic
+replacement, permissions, and platform behavior without publication or an
+uncontrolled network.
 
 ## Release assets
 
@@ -105,7 +85,7 @@ midas-lex-private-VERSION-TARGET.sha256
 midas-lex-private-VERSION-TARGET.exe.sha256
 ```
 
-Public wrapper assets used by `+self-update` use this pattern:
+Public wrapper assets used by automatic updates use this pattern:
 
 ```text
 midas-lex-VERSION-TARGET

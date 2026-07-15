@@ -23,18 +23,7 @@ const VERBOSE_ENV: &str = "MIDAS_LEX_VERUS_VERBOSE";
 const LOG_ENV: &str = "MIDAS_LEX_VERUS_LOG";
 const BACKGROUND_UPDATE_EXE_ENV: &str = "MIDAS_LEX_VERUS_WRAPPER_BACKGROUND_UPDATE_EXE";
 const BACKGROUND_UPDATE_MARKER_ENV: &str = "MIDAS_LEX_VERUS_WRAPPER_BACKGROUND_UPDATE_MARKER";
-const SELF_UPDATE_COMMAND: &str = "+self-update";
-const SELF_UPDATE_HELP: &str = "\
-Usage: midas-lex +self-update
-
-Download the newest official wrapper release for this platform, verify its
-SHA-256 checksum, and replace the running wrapper executable.
-
-Selection prefers the newest non-draft stable release and falls back to the
-newest non-draft prerelease only when no stable release exists. In-place update
-is supported on Linux and macOS. On Windows, reinstall after this command exits
-with `cargo install midas-lex --force`.
-";
+const WRAPPER_UPDATE_LOCK_FILE: &str = ".midas-lex-self-update.lock";
 const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const MAX_BINARY_BYTES: u64 = 200 * 1024 * 1024;
 const MAX_TEXT_BYTES: u64 = 1024 * 1024;
@@ -55,76 +44,58 @@ fn run(args: Vec<OsString>) -> MidasLexResult<ExitCode> {
         run_background_update();
         return Ok(ExitCode::SUCCESS);
     }
-    if let Some(command) = parse_self_update_command(&args)? {
-        return match command {
-            SelfUpdateCommand::Help => {
-                print!("{SELF_UPDATE_HELP}");
-                Ok(ExitCode::SUCCESS)
-            }
-            SelfUpdateCommand::Run => {
-                let target = Target::current()?;
-                let status = self_update_current_wrapper(&target)?;
-                match status {
-                    SelfUpdateStatus::Current { version } => {
-                        println!("Midas Lex wrapper v{version} is already current");
-                    }
-                    SelfUpdateStatus::Updated { from, to } => {
-                        println!("updated Midas Lex wrapper from v{from} to {to}");
-                    }
-                }
-                Ok(ExitCode::SUCCESS)
-            }
-        };
-    }
     let config = Config::from_env()?;
     let target = Target::current()?;
     let install = InstallStore::new(config.install_home.clone());
     let (selector, real_args) = parse_version_selector(args)?;
-    match selector {
-        Some(selector) => {
+    let installed_default = if selector.is_none() {
+        install.latest_installed(&target)?
+    } else {
+        None
+    };
+    let update_policy = automatic_update_policy(selector.is_some(), installed_default.is_some());
+    let (tag, bin_path) = match (selector, installed_default) {
+        (Some(selector), None) => {
             let selected = install.ensure_version(&config, &target, &selector)?;
-            log_dispatch(&config, &selected.tag, &selected.bin_path);
-            run_real_binary(&selected.bin_path, real_args)
+            (selected.tag, selected.bin_path)
         }
-        None => match install.latest_installed(&target)? {
-            Some(installed) => {
-                log_dispatch(&config, &installed.tag, &installed.bin_path);
-                run_real_binary_with_background_update(
-                    &installed.bin_path,
-                    real_args,
-                    &target,
-                    &config,
-                )
-            }
-            None => {
-                log::info!("no installed Midas Lex binary; downloading latest release");
-                let bin = install.install_latest(&config, &target)?;
-                let tag = bin_tag(&bin).unwrap_or_else(|| "unknown".to_string());
-                log_dispatch(&config, &tag, &bin);
-                run_real_binary(&bin, real_args)
-            }
-        },
+        (None, Some(installed)) => (installed.tag, installed.bin_path),
+        (None, None) => {
+            log::info!("no installed Midas Lex binary; downloading latest release");
+            let bin = install.install_latest(&config, &target)?;
+            let tag = bin_tag(&bin).unwrap_or_else(|| "unknown".to_string());
+            (tag, bin)
+        }
+        (Some(_), Some(_)) => unreachable!("explicit selectors do not resolve default runtimes"),
+    };
+    log_dispatch(&config, &tag, &bin_path);
+    match update_policy {
+        AutomaticUpdatePolicy::AfterRuntimeStart => {
+            run_real_binary_with_background_update(&bin_path, real_args, &target, &config)
+        }
+        AutomaticUpdatePolicy::SkipFirstRun | AutomaticUpdatePolicy::SkipExplicitSelector => {
+            run_real_binary(&bin_path, real_args)
+        }
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SelfUpdateCommand {
-    Run,
-    Help,
+enum AutomaticUpdatePolicy {
+    AfterRuntimeStart,
+    SkipFirstRun,
+    SkipExplicitSelector,
 }
 
-fn parse_self_update_command(args: &[OsString]) -> MidasLexResult<Option<SelfUpdateCommand>> {
-    if args.first().and_then(|arg| arg.to_str()) != Some(SELF_UPDATE_COMMAND) {
-        return Ok(None);
-    }
-    match args.get(1) {
-        None => Ok(Some(SelfUpdateCommand::Run)),
-        Some(arg) if args.len() == 2 && matches!(arg.to_str(), Some("-h" | "--help")) => {
-            Ok(Some(SelfUpdateCommand::Help))
-        }
-        _ => Err(error(
-            "usage: `midas-lex +self-update` accepts no runtime arguments or version selectors; run `midas-lex +self-update --help`",
-        )),
+fn automatic_update_policy(
+    has_selector: bool,
+    has_installed_default: bool,
+) -> AutomaticUpdatePolicy {
+    if has_selector {
+        AutomaticUpdatePolicy::SkipExplicitSelector
+    } else if has_installed_default {
+        AutomaticUpdatePolicy::AfterRuntimeStart
+    } else {
+        AutomaticUpdatePolicy::SkipFirstRun
     }
 }
 
@@ -133,20 +104,67 @@ fn run_background_update() {
         let config = Config::from_env()?;
         let target = Target::current()?;
         let install = InstallStore::new(config.install_home.clone());
-        install.update_latest(&config, &target)
+        let release = ReleaseClient::new(config.release_repo.clone()).latest_release()?;
+        let results = apply_background_release(&install, &release, &target, |release, target| {
+            update_current_wrapper_from_release(release, target, &config.release_repo)
+        });
+        log_background_update_results(results);
+        Ok(())
     })();
     if let Err(err) = result {
         log::warn!("automatic update check failed: {err}");
     }
 }
 
+struct BackgroundUpdateResults {
+    wrapper: MidasLexResult<WrapperUpdateStatus>,
+    runtime: MidasLexResult<()>,
+}
+
+fn apply_background_release(
+    install: &InstallStore,
+    release: &Release,
+    target: &Target,
+    update_wrapper: impl FnOnce(&Release, &Target) -> MidasLexResult<WrapperUpdateStatus>,
+) -> BackgroundUpdateResults {
+    let wrapper = update_wrapper(release, target);
+    let runtime = install.update_release(release, target);
+    BackgroundUpdateResults { wrapper, runtime }
+}
+
+fn log_background_update_results(results: BackgroundUpdateResults) {
+    match results.wrapper {
+        Ok(WrapperUpdateStatus::Current { version }) => {
+            log::info!("Midas Lex wrapper v{version} is current");
+        }
+        Ok(WrapperUpdateStatus::Updated { from, to }) => {
+            log::info!("updated Midas Lex wrapper from v{from} to {to}");
+        }
+        Ok(WrapperUpdateStatus::SkippedWindows) => {
+            log::info!(
+                "automatic wrapper update is unavailable on Windows; run `cargo install midas-lex --force` after Midas Lex exits"
+            );
+        }
+        Ok(WrapperUpdateStatus::SkippedUnofficialRepository) => {
+            log::info!(
+                "automatic wrapper update skipped because {RELEASE_REPO_ENV} does not name {DEFAULT_RELEASE_REPO}"
+            );
+        }
+        Err(err) => log::warn!("automatic wrapper update failed: {err}"),
+    }
+    if let Err(err) = results.runtime {
+        log::warn!("automatic runtime update failed: {err}");
+    }
+}
+
 fn maybe_spawn_background_update(target: &Target, config: &Config) -> MidasLexResult<()> {
     let exe = env::current_exe()?;
-    let stamp = update_stamp_path(target, &exe)?;
+    let stamp = update_stamp_path(target)?;
     if !claim_update_timer(&stamp)? {
         return Ok(());
     }
     let marker = background_marker_path(target)?;
+    let mut marker_cleanup = RemoveFileOnDrop::new(marker.clone());
     let mut marker_file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -162,6 +180,7 @@ fn maybe_spawn_background_update(target: &Target, config: &Config) -> MidasLexRe
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()?;
+    marker_cleanup.disarm();
     Ok(())
 }
 
@@ -207,8 +226,16 @@ fn run_real_binary_with_background_update(
     target: &Target,
     config: &Config,
 ) -> MidasLexResult<ExitCode> {
+    run_real_binary_with_update_start(bin, args, || maybe_spawn_background_update(target, config))
+}
+
+fn run_real_binary_with_update_start(
+    bin: &Path,
+    args: Vec<OsString>,
+    start_update: impl FnOnce() -> MidasLexResult<()>,
+) -> MidasLexResult<ExitCode> {
     let mut child = Command::new(bin).args(args).spawn()?;
-    if let Err(err) = maybe_spawn_background_update(target, config) {
+    if let Err(err) = start_update() {
         log::warn!("automatic update check could not start: {err}");
     }
     let status = child.wait()?;
@@ -288,6 +315,12 @@ struct Target {
     exe_name: &'static str,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WrapperUpdateSupport {
+    AtomicReplace,
+    RunningWindowsExe,
+}
+
 impl Target {
     fn current() -> MidasLexResult<Self> {
         current_target().ok_or_else(|| error("unsupported Midas Lex platform"))
@@ -313,17 +346,17 @@ impl Target {
         format!("{}.sha256", self.wrapper_asset_name(tag))
     }
 
-    fn require_in_place_self_update(&self) -> MidasLexResult<()> {
+    fn wrapper_update_support(&self) -> MidasLexResult<WrapperUpdateSupport> {
         match self.triple {
             "x86_64-unknown-linux-musl"
             | "aarch64-unknown-linux-musl"
             | "x86_64-apple-darwin"
-            | "aarch64-apple-darwin" => Ok(()),
-            "x86_64-pc-windows-msvc" | "aarch64-pc-windows-msvc" => Err(error(
-                "in-place wrapper self-update is unavailable on Windows because a running `.exe` cannot be safely replaced; after this command exits, run `cargo install midas-lex --force`",
-            )),
+            | "aarch64-apple-darwin" => Ok(WrapperUpdateSupport::AtomicReplace),
+            "x86_64-pc-windows-msvc" | "aarch64-pc-windows-msvc" => {
+                Ok(WrapperUpdateSupport::RunningWindowsExe)
+            }
             _ => Err(error(format!(
-                "wrapper self-update is unsupported for target {}",
+                "automatic wrapper update is unsupported for target {}",
                 self.triple
             ))),
         }
@@ -501,11 +534,10 @@ impl InstallStore {
         self.install_release(&release, target)
     }
 
-    fn update_latest(&self, config: &Config, target: &Target) -> MidasLexResult<()> {
+    fn update_release(&self, release: &Release, target: &Target) -> MidasLexResult<()> {
         let Some(current) = self.latest_installed(target)? else {
             return Ok(());
         };
-        let release = ReleaseClient::new(config.release_repo.clone()).latest_release()?;
         let remote_version = parse_tag_version(&release.tag_name)?;
         if remote_version <= current.version {
             log::info!("Midas Lex {} is already installed", current.tag);
@@ -515,7 +547,7 @@ impl InstallStore {
             "downloading Midas Lex {} for the next invocation",
             release.tag_name
         );
-        let installed = self.install_release(&release, target)?;
+        let installed = self.install_release(release, target)?;
         log::info!("installed Midas Lex update at {}", installed.display());
         Ok(())
     }
@@ -847,18 +879,23 @@ impl ReleaseClient {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum SelfUpdateStatus {
+enum WrapperUpdateStatus {
     Current { version: Version },
     Updated { from: Version, to: String },
+    SkippedWindows,
+    SkippedUnofficialRepository,
 }
 
-fn self_update_current_wrapper(target: &Target) -> MidasLexResult<SelfUpdateStatus> {
-    target.require_in_place_self_update()?;
-    let release_repo = configured_release_repo();
+fn update_current_wrapper_from_release(
+    release: &Release,
+    target: &Target,
+    release_repo: &str,
+) -> MidasLexResult<WrapperUpdateStatus> {
     if release_repo != DEFAULT_RELEASE_REPO {
-        return Err(error(format!(
-            "wrapper self-update only accepts official releases from {DEFAULT_RELEASE_REPO}; unset {RELEASE_REPO_ENV} and retry"
-        )));
+        return Ok(WrapperUpdateStatus::SkippedUnofficialRepository);
+    }
+    if target.wrapper_update_support()? == WrapperUpdateSupport::RunningWindowsExe {
+        return Ok(WrapperUpdateStatus::SkippedWindows);
     }
     let current_exe = env::current_exe().map_err(|err| {
         error(format!(
@@ -872,8 +909,7 @@ fn self_update_current_wrapper(target: &Target) -> MidasLexResult<SelfUpdateStat
         ))
     })?;
     let current_version = Version::parse(env!("CARGO_PKG_VERSION"))?;
-    let release = ReleaseClient::new(release_repo).latest_release()?;
-    update_wrapper_from_release(&release, target, &current_exe, &current_version)
+    update_wrapper_from_release(release, target, &current_exe, &current_version)
 }
 
 fn update_wrapper_from_release(
@@ -881,14 +917,16 @@ fn update_wrapper_from_release(
     target: &Target,
     current_exe: &Path,
     current_version: &Version,
-) -> MidasLexResult<SelfUpdateStatus> {
-    target.require_in_place_self_update()?;
+) -> MidasLexResult<WrapperUpdateStatus> {
+    if target.wrapper_update_support()? == WrapperUpdateSupport::RunningWindowsExe {
+        return Ok(WrapperUpdateStatus::SkippedWindows);
+    }
     if release.draft {
-        return Err(error("wrapper self-update refuses draft releases"));
+        return Err(error("automatic wrapper update refuses draft releases"));
     }
     let release_version = parse_tag_version(&release.tag_name)?;
     if release_version <= *current_version {
-        return Ok(SelfUpdateStatus::Current {
+        return Ok(WrapperUpdateStatus::Current {
             version: current_version.clone(),
         });
     }
@@ -905,14 +943,14 @@ fn update_wrapper_from_release(
         .parent()
         .ok_or_else(|| error("running wrapper executable has no parent directory"))?;
     let _lock = FileLock::acquire(
-        &parent.join(".midas-lex-self-update.lock"),
-        "Midas Lex wrapper self-update",
+        &parent.join(WRAPPER_UPDATE_LOCK_FILE),
+        "Midas Lex wrapper update",
     )?;
     require_unchanged_wrapper(current_exe, &initial_digest)?;
 
     let checksum_text = download_text(&checksum_asset.browser_download_url, MAX_TEXT_BYTES)?;
     let expected = parse_asset_checksum(&checksum_text, &asset_name)?;
-    let stage = self_update_stage_path(current_exe)?;
+    let stage = wrapper_update_stage_path(current_exe)?;
     download_file(&asset.browser_download_url, &stage, MAX_BINARY_BYTES).map_err(|err| {
         error(format!(
             "cannot stage wrapper update beside {}: {err}; ensure its directory is writable",
@@ -952,7 +990,7 @@ fn update_wrapper_from_release(
         release.tag_name,
         current_exe.display()
     );
-    Ok(SelfUpdateStatus::Updated {
+    Ok(WrapperUpdateStatus::Updated {
         from: current_version.clone(),
         to: release.tag_name.clone(),
     })
@@ -983,14 +1021,14 @@ fn require_unchanged_wrapper(path: &Path, initial_digest: &str) -> MidasLexResul
     let digest = current_wrapper_digest(path)?;
     if digest != initial_digest {
         return Err(error(format!(
-            "running wrapper path {} changed during self-update; no file was replaced, so rerun the command",
+            "running wrapper path {} changed during automatic update; no file was replaced",
             path.display()
         )));
     }
     Ok(fs::metadata(path)?.permissions())
 }
 
-fn self_update_stage_path(current_exe: &Path) -> MidasLexResult<PathBuf> {
+fn wrapper_update_stage_path(current_exe: &Path) -> MidasLexResult<PathBuf> {
     let parent = current_exe
         .parent()
         .ok_or_else(|| error("running wrapper executable has no parent directory"))?;
@@ -1003,7 +1041,7 @@ fn self_update_stage_path(current_exe: &Path) -> MidasLexResult<PathBuf> {
         .unwrap_or(Duration::ZERO)
         .as_nanos();
     Ok(parent.join(format!(
-        ".{name}.self-update-{}-{nanos}.tmp",
+        ".{name}.wrapper-update-{}-{nanos}.tmp",
         std::process::id()
     )))
 }
@@ -1180,6 +1218,7 @@ fn checksum_record_is_pre_release(text: &str) -> bool {
     text.lines().any(|line| line.trim() == "pre_release: true")
 }
 
+#[cfg(any(test, not(unix)))]
 fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     hex_digest(digest)
@@ -1207,9 +1246,8 @@ fn hex_digest(digest: impl IntoIterator<Item = u8>) -> String {
     out
 }
 
-fn update_stamp_path(target: &Target, exe: &Path) -> MidasLexResult<PathBuf> {
-    let exe_hash = short_hash(sha256_file(exe)?.as_bytes());
-    Ok(temp_state_dir()?.join(format!("update-{}-{}.stamp", target.triple, exe_hash)))
+fn update_stamp_path(target: &Target) -> MidasLexResult<PathBuf> {
+    Ok(temp_state_dir()?.join(format!("update-{}.stamp", target.triple)))
 }
 
 fn background_marker_path(target: &Target) -> MidasLexResult<PathBuf> {
@@ -1225,24 +1263,31 @@ fn background_marker_path(target: &Target) -> MidasLexResult<PathBuf> {
 }
 
 fn claim_update_timer(stamp: &Path) -> MidasLexResult<bool> {
-    if let Ok(metadata) = fs::symlink_metadata(stamp)
-        && let Ok(modified) = metadata.modified()
-        && metadata.file_type().is_file()
-        && SystemTime::now()
-            .duration_since(modified)
-            .unwrap_or(Duration::ZERO)
-            < UPDATE_CHECK_INTERVAL
-    {
-        return Ok(false);
-    }
-    match OpenOptions::new().write(true).create_new(true).open(stamp) {
-        Ok(mut file) => file.write_all(b"")?,
-        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
-            let metadata = fs::symlink_metadata(stamp)?;
+    let _lock = FileLock::acquire(
+        &stamp.with_extension("lock"),
+        "Midas Lex automatic update timer",
+    )?;
+    match fs::symlink_metadata(stamp) {
+        Ok(metadata) => {
             if !metadata.file_type().is_file() {
                 return Err(error("update timer path is not a regular file"));
             }
+            if let Ok(modified) = metadata.modified()
+                && SystemTime::now()
+                    .duration_since(modified)
+                    .unwrap_or(Duration::ZERO)
+                    < UPDATE_CHECK_INTERVAL
+            {
+                return Ok(false);
+            }
             let mut file = OpenOptions::new().write(true).truncate(true).open(stamp)?;
+            file.write_all(b"")?;
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(stamp)?;
             file.write_all(b"")?;
         }
         Err(err) => return Err(Box::new(err)),
@@ -1301,6 +1346,7 @@ fn ensure_private_temp_dir(path: &Path) -> MidasLexResult<()> {
     Ok(())
 }
 
+#[cfg(not(unix))]
 fn short_hash(bytes: &[u8]) -> String {
     sha256_hex(bytes)[..16].to_string()
 }
@@ -1389,53 +1435,48 @@ mod tests {
     }
 
     #[test]
-    fn parses_self_update_command_and_help() {
+    fn automatic_update_policy_preserves_first_run_and_selector_behavior() {
         assert_eq!(
-            parse_self_update_command(&[OsString::from("+self-update")]).unwrap(),
-            Some(SelfUpdateCommand::Run)
+            automatic_update_policy(false, true),
+            AutomaticUpdatePolicy::AfterRuntimeStart
         );
         assert_eq!(
-            parse_self_update_command(&[OsString::from("+self-update"), OsString::from("--help")])
-                .unwrap(),
-            Some(SelfUpdateCommand::Help)
+            automatic_update_policy(false, false),
+            AutomaticUpdatePolicy::SkipFirstRun
+        );
+        assert_eq!(
+            automatic_update_policy(true, false),
+            AutomaticUpdatePolicy::SkipExplicitSelector
+        );
+        assert_eq!(
+            automatic_update_policy(true, true),
+            AutomaticUpdatePolicy::SkipExplicitSelector
         );
     }
 
     #[test]
-    fn self_update_rejects_runtime_args_and_selectors() {
-        for second in ["docs", "+prerelease", "+v0.0.2"] {
-            let err = parse_self_update_command(&[
-                OsString::from("+self-update"),
-                OsString::from(second),
-            ])
-            .unwrap_err();
-            assert!(err.to_string().contains("accepts no runtime arguments"));
-        }
+    fn keeps_self_update_like_args_unchanged() {
+        let args = vec![OsString::from("+self-update"), OsString::from("--help")];
+        let (selector, remaining) = parse_version_selector(args.clone()).unwrap();
+        assert!(selector.is_none());
+        assert_eq!(remaining, args);
     }
 
     #[cfg(unix)]
     #[test]
-    fn self_update_rejects_non_utf8_argument() {
+    fn keeps_non_utf8_runtime_args_unchanged() {
         use std::os::unix::ffi::OsStringExt;
-        let err = parse_self_update_command(&[
-            OsString::from("+self-update"),
-            OsString::from_vec(vec![0xff]),
-        ])
-        .unwrap_err();
-        assert!(err.to_string().contains("accepts no runtime arguments"));
-    }
-
-    #[test]
-    fn self_update_is_only_reserved_as_the_leading_argument() {
-        let args = vec![OsString::from("+v0.0.2"), OsString::from("+self-update")];
-        assert!(parse_self_update_command(&args).unwrap().is_none());
-        let (_, remaining) = parse_version_selector(args).unwrap();
-        assert_eq!(remaining, vec![OsString::from("+self-update")]);
-        assert!(
-            parse_self_update_command(&[OsString::from("self-update")])
-                .unwrap()
-                .is_none()
-        );
+        for args in [
+            vec![OsString::from_vec(vec![0xff]), OsString::from("docs")],
+            vec![
+                OsString::from("+self-update"),
+                OsString::from_vec(vec![0xff]),
+            ],
+        ] {
+            let (selector, remaining) = parse_version_selector(args.clone()).unwrap();
+            assert!(selector.is_none());
+            assert_eq!(remaining, args);
+        }
     }
 
     #[test]
@@ -1573,6 +1614,11 @@ mod tests {
             windows.wrapper_checksum_asset_name("v0.0.2-beta.1"),
             "midas-lex-v0.0.2-beta.1-aarch64-pc-windows-msvc.exe.sha256"
         );
+    }
+
+    #[test]
+    fn wrapper_update_lock_name_stays_rollout_compatible() {
+        assert_eq!(WRAPPER_UPDATE_LOCK_FILE, ".midas-lex-self-update.lock");
     }
 
     #[test]
@@ -1763,9 +1809,88 @@ mod tests {
         assert!(record.contains("checksum_url: file://"));
     }
 
+    #[test]
+    fn background_wrapper_failure_does_not_block_runtime_update() {
+        let dir = tempfile::tempdir().unwrap();
+        let source_dir = tempfile::tempdir().unwrap();
+        let store = InstallStore::new(dir.path().to_path_buf());
+        let target = test_target();
+        write_cached_install(
+            &store,
+            &target,
+            "v0.0.1-beta.1",
+            b"old runtime",
+            b"old runtime",
+        );
+        let mut release = write_wrapper_release(
+            source_dir.path(),
+            &target,
+            "v0.0.2-beta.1",
+            b"wrapper",
+            b"wrapper",
+        );
+        add_runtime_assets(
+            source_dir.path(),
+            &target,
+            &mut release,
+            b"new runtime",
+            b"new runtime",
+        );
+
+        let results = apply_background_release(&store, &release, &target, |_, _| {
+            Err(error("injected wrapper update failure"))
+        });
+
+        assert!(
+            results
+                .wrapper
+                .unwrap_err()
+                .to_string()
+                .contains("injected")
+        );
+        results.runtime.unwrap();
+        let installed = store
+            .verified_bin("v0.0.2-beta.1", &target)
+            .unwrap()
+            .unwrap();
+        assert_eq!(fs::read(installed).unwrap(), b"new runtime");
+    }
+
+    #[test]
+    fn update_start_failure_does_not_change_runtime_exit() {
+        use std::cell::Cell;
+        let called = Cell::new(false);
+        let status = run_real_binary_with_update_start(
+            &env::current_exe().unwrap(),
+            vec![
+                OsString::from("__midas_lex_no_such_test__"),
+                OsString::from("--exact"),
+                OsString::from("--quiet"),
+            ],
+            || {
+                called.set(true);
+                Err(error("injected update start failure"))
+            },
+        )
+        .unwrap();
+        assert!(called.get());
+        assert_eq!(status, ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn automatic_wrapper_update_skips_unofficial_repository() {
+        let status = update_current_wrapper_from_release(
+            &test_pre_release("v0.0.2-beta.1"),
+            &test_target(),
+            "example/not-official",
+        )
+        .unwrap();
+        assert_eq!(status, WrapperUpdateStatus::SkippedUnofficialRepository);
+    }
+
     #[cfg(unix)]
     #[test]
-    fn self_update_atomically_replaces_wrapper_and_preserves_mode() {
+    fn automatic_wrapper_update_atomically_replaces_and_preserves_mode() {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
         let dir = tempfile::tempdir().unwrap();
         let source_dir = tempfile::tempdir().unwrap();
@@ -1792,7 +1917,7 @@ mod tests {
 
         assert_eq!(
             status,
-            SelfUpdateStatus::Updated {
+            WrapperUpdateStatus::Updated {
                 from: Version::parse("0.0.1-beta.1").unwrap(),
                 to: "v0.0.2-beta.1".to_string(),
             }
@@ -1801,12 +1926,12 @@ mod tests {
         let metadata = fs::metadata(&current_exe).unwrap();
         assert_ne!(metadata.ino(), old_inode);
         assert_eq!(metadata.permissions().mode() & 0o777, 0o751);
-        assert_no_self_update_stage(dir.path());
+        assert_no_wrapper_update_stage(dir.path());
     }
 
     #[cfg(unix)]
     #[test]
-    fn self_update_checksum_mismatch_preserves_wrapper_and_cleans_stage() {
+    fn automatic_wrapper_checksum_mismatch_preserves_wrapper_and_cleans_stage() {
         let dir = tempfile::tempdir().unwrap();
         let source_dir = tempfile::tempdir().unwrap();
         let current_exe = dir.path().join("midas-lex");
@@ -1830,12 +1955,12 @@ mod tests {
 
         assert!(err.to_string().contains("checksum mismatch"));
         assert_eq!(fs::read(&current_exe).unwrap(), b"old wrapper");
-        assert_no_self_update_stage(dir.path());
+        assert_no_wrapper_update_stage(dir.path());
     }
 
     #[cfg(unix)]
     #[test]
-    fn self_update_rejects_malformed_or_missing_checksum() {
+    fn automatic_wrapper_update_rejects_malformed_or_missing_checksum() {
         let dir = tempfile::tempdir().unwrap();
         let source_dir = tempfile::tempdir().unwrap();
         let current_exe = dir.path().join("midas-lex");
@@ -1872,12 +1997,12 @@ mod tests {
         .unwrap_err();
         assert!(err.to_string().contains("wrapper checksum missing"));
         assert_eq!(fs::read(&current_exe).unwrap(), b"old wrapper");
-        assert_no_self_update_stage(dir.path());
+        assert_no_wrapper_update_stage(dir.path());
     }
 
     #[cfg(unix)]
     #[test]
-    fn self_update_permission_failure_is_non_destructive() {
+    fn automatic_wrapper_permission_failure_is_non_destructive() {
         use std::os::unix::fs::PermissionsExt;
         if unsafe { libc::geteuid() } == 0 {
             return;
@@ -1904,13 +2029,13 @@ mod tests {
         fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o755)).unwrap();
 
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("self-update lock"));
+        assert!(err.to_string().contains("wrapper update lock"));
         assert_eq!(fs::read(&current_exe).unwrap(), b"old wrapper");
-        assert_no_self_update_stage(dir.path());
+        assert_no_wrapper_update_stage(dir.path());
     }
 
     #[test]
-    fn self_update_reports_windows_recovery_without_downloading() {
+    fn automatic_wrapper_update_skips_windows_without_downloading() {
         for target in [
             Target {
                 triple: "x86_64-pc-windows-msvc",
@@ -1921,20 +2046,26 @@ mod tests {
                 exe_name: "midas-lex.exe",
             },
         ] {
-            let err = update_wrapper_from_release(
+            let status = update_wrapper_from_release(
                 &test_release("v0.0.2-beta.1", false),
                 &target,
                 Path::new("midas-lex.exe"),
                 &Version::parse("0.0.1-beta.1").unwrap(),
             )
-            .unwrap_err();
-            assert!(err.to_string().contains("running `.exe`"));
-            assert!(err.to_string().contains("cargo install midas-lex --force"));
+            .unwrap();
+            assert_eq!(status, WrapperUpdateStatus::SkippedWindows);
+            let status = update_current_wrapper_from_release(
+                &test_release("v0.0.2-beta.1", false),
+                &target,
+                DEFAULT_RELEASE_REPO,
+            )
+            .unwrap();
+            assert_eq!(status, WrapperUpdateStatus::SkippedWindows);
         }
     }
 
     #[test]
-    fn self_update_does_not_replace_with_same_or_older_release() {
+    fn automatic_wrapper_update_does_not_replace_with_same_or_older_release() {
         let target = test_target();
         for tag in ["v0.0.1-beta.1", "v0.0.1-beta.0"] {
             assert_eq!(
@@ -1945,7 +2076,7 @@ mod tests {
                     &Version::parse("0.0.1-beta.1").unwrap(),
                 )
                 .unwrap(),
-                SelfUpdateStatus::Current {
+                WrapperUpdateStatus::Current {
                     version: Version::parse("0.0.1-beta.1").unwrap()
                 }
             );
@@ -2017,8 +2148,7 @@ mod tests {
     #[test]
     fn update_stamp_uses_private_temp_subdir() {
         let target = test_target();
-        let exe = env::current_exe().unwrap();
-        let stamp = update_stamp_path(&target, &exe).unwrap();
+        let stamp = update_stamp_path(&target).unwrap();
         #[cfg(unix)]
         assert_eq!(
             stamp.parent().unwrap(),
@@ -2035,20 +2165,22 @@ mod tests {
                 .to_string_lossy()
                 .starts_with("midas-lex-wrapper-")
         );
-        assert!(
-            stamp
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .contains(target.triple)
+        assert_eq!(
+            stamp.file_name().unwrap().to_string_lossy(),
+            format!("update-{}.stamp", target.triple)
         );
-        assert!(
-            stamp
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .contains(&short_hash(sha256_file(&exe).unwrap().as_bytes()))
-        );
+    }
+
+    #[test]
+    fn concurrent_update_timer_claims_only_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let stamp = dir.path().join("update.stamp");
+        let left_stamp = stamp.clone();
+        let left = thread::spawn(move || claim_update_timer(&left_stamp).unwrap());
+        let right = thread::spawn(move || claim_update_timer(&stamp).unwrap());
+        let mut results = [left.join().unwrap(), right.join().unwrap()];
+        results.sort_unstable();
+        assert_eq!(results, [false, true]);
     }
 
     #[cfg(not(windows))]
@@ -2164,7 +2296,36 @@ mod tests {
         }
     }
 
-    fn assert_no_self_update_stage(dir: &Path) {
+    fn add_runtime_assets(
+        source_dir: &Path,
+        target: &Target,
+        release: &mut Release,
+        binary: &[u8],
+        checksum_source: &[u8],
+    ) {
+        let asset_name = target.runtime_asset_name(&release.tag_name);
+        let checksum_name = target.runtime_checksum_asset_name(&release.tag_name);
+        let binary_path = source_dir.join(&asset_name);
+        let checksum_path = source_dir.join(&checksum_name);
+        fs::write(&binary_path, binary).unwrap();
+        fs::write(
+            &checksum_path,
+            format!("{}  {asset_name}\n", sha256_hex(checksum_source)),
+        )
+        .unwrap();
+        release.assets.extend([
+            ReleaseAsset {
+                name: asset_name,
+                browser_download_url: format!("file://{}", binary_path.display()),
+            },
+            ReleaseAsset {
+                name: checksum_name,
+                browser_download_url: format!("file://{}", checksum_path.display()),
+            },
+        ]);
+    }
+
+    fn assert_no_wrapper_update_stage(dir: &Path) {
         assert!(!fs::read_dir(dir).unwrap().any(|entry| {
             entry
                 .unwrap()

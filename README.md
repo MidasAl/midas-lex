@@ -47,8 +47,9 @@ midas-lex +prerelease docs
 ```
 
 The selector is consumed by the launcher, so the real Midas Lex binary receives
-the remaining arguments unchanged. Environment variables are inherited by the
-real binary.
+the remaining arguments unchanged. Other leading `+` arguments, including
+`+self-update`, are not wrapper commands and pass through unchanged. Environment
+variables are inherited by the real binary.
 
 By default, the launcher prefers ordinary GitHub releases and falls back to a
 pre-release only when no stable release exists. Use a `+vVERSION` selector to
@@ -58,31 +59,21 @@ release, including alpha, beta, and release-candidate tags.
 Set `MIDAS_LEX_VERUS_VERBOSE=1` to show the selected runtime version tag and
 binary path. Set `MIDAS_LEX_VERUS_LOG=info` to show download and update logs.
 
-## Update the wrapper
+## Automatic updates
 
-```sh
-midas-lex +self-update
-midas-lex +self-update --help
-```
+On a default invocation with a verified runtime already installed, the wrapper
+starts that runtime before starting one throttled background child. The child
+uses one stable-preferred, non-draft release lookup to check both the public
+wrapper and runtime for the next invocation. Network, integrity, permission, or
+replacement failures are warnings and do not change the current runtime command.
+The first run installs and starts the runtime without a background check;
+explicit version selectors also keep their existing direct behavior.
 
-`+self-update` is a wrapper-only leading command. It accepts no version selector
-or runtime arguments. It selects the newest non-draft stable release from the
-official `MidasAl/midas-lex` repository, or the newest non-draft pre-release when
-no stable release exists. It downloads only the public wrapper asset for the
-current target and its same-name `.sha256` file.
-
-On Linux and macOS, the command verifies the checksum, stages the replacement
-beside the running wrapper, preserves its executable mode, and atomically renames
-the verified file over that exact executable. It never chooses another binary
-from `PATH`. Concurrent updates serialize on a lock beside the executable and
-abort if its on-disk contents changed while waiting. Ordinary failures remove the
-staged file and leave the wrapper unchanged. A permissions error requires write
-access to the wrapper's directory or a reinstall with
-`cargo install midas-lex --force`.
-
-Windows does not permit this command to replace its running `.exe`. The command
-exits without downloading or changing a file and directs the user to run
-`cargo install midas-lex --force` after it exits.
+On Linux and macOS, a newer wrapper is verified against its exact same-name
+SHA-256 record, staged beside the resolved running executable, and atomically
+renamed over that path with its executable mode preserved. On Windows, automatic
+runtime updates continue but running-wrapper replacement is skipped; use
+`cargo install midas-lex --force` after Midas Lex exits to update the wrapper.
 
 ## Releases
 

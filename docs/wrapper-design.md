@@ -8,14 +8,12 @@ wrapper design
   - `midas-lex` is the only user command
   - startup parses an optional leading selector, resolves the runtime, and passes every remaining argument unchanged
   - with no selector, an installed verified runtime starts first; the wrapper then starts a separate background child for the throttled update check and waits for the runtime child
-  - the background child is marked with private environment variables and a one-use marker, performs the update check, logs failures as warnings, and exits without starting the runtime
+  - the background child is marked with private environment variables and a one-use marker, performs one release lookup for wrapper and runtime checks, logs failures without changing the running command, and exits without starting the runtime
   - a first run with no installed runtime installs the selected latest release before starting it, so no background update child is needed for that invocation
   - `midas-lex +v0.0.1-alpha.1 ...` selects an exact installed or downloadable release
   - `midas-lex +prerelease ...` selects the newest non-draft semver release, including pre-release tags
   - explicit `+prerelease` selection is the only latest pre-release opt-in path
-  - `midas-lex +self-update` is the only wrapper-owned user command and accepts no selector or runtime arguments
-  - `midas-lex +self-update --help` prints its wrapper-owned help without resolving a runtime
-  - all other arguments are passed to the real binary unchanged
+  - all other arguments, including unrecognized leading `+` tokens, are passed to the real binary unchanged
   - environment variables are inherited by the real binary
 - install path
   - `MIDAS_LEX_VERUS_HOME` overrides storage
@@ -43,20 +41,23 @@ wrapper design
 - update timer
   - update checks are throttled by a stamp file in a private per-user system-temp directory
   - the interval is 1 hour per platform
+  - a file lock serializes timer claims across concurrent wrapper processes
 - integrity
   - each binary asset has a same-name `.sha256` asset
   - checksum mismatch stops installation
   - partially downloaded files are never executed
-- wrapper self-update
-  - release selection reuses the default stable-preferred, non-draft semantic-version lookup against only `MidasAl/midas-lex`
+- automatic wrapper update
+  - a default run with an installed verified runtime starts that runtime before the background update child
+  - first runs and explicit selectors do not start the automatic update child
+  - wrapper selection reuses the background child's stable-preferred, non-draft semantic-version release from `MidasAl/midas-lex`
   - the selected asset is `midas-lex-VERSION-TARGET[.exe]`; runtime asset selection remains unchanged
   - Linux and macOS resolve the running executable, stage beside it, verify the exact one-line checksum record, preserve its mode, sync, and atomically rename
   - an adjacent file lock serializes updates; the running executable digest is checked before and after waiting and again before rename
   - ordinary errors delete the staged file and preserve the installed wrapper
-  - Windows retains wrapper release assets but rejects in-place replacement before download and directs users to `cargo install midas-lex --force`
+  - Windows retains wrapper release assets, skips running `.exe` replacement without failing the current runtime, and directs users to `cargo install midas-lex --force`
 
 - safe local walkthrough
-  - `cargo test` exercises selector and self-update parsing, release ordering, data-directory selection, timer, marker, locks, checksum failures, atomic replacement, permissions, and platform handling
+  - `cargo test` exercises selector and pass-through parsing, first-run policy, release ordering, data-directory selection, timer, marker, locks, independent update failures, checksum cleanup, atomic replacement, permissions, and platform handling
   - `cargo run -- help` checks the real wrapper command path and may download a runtime when none is installed
   - `MIDAS_LEX_VERUS_HOME=/tmp/midas-lex-doc-check cargo run -- +v0.0.1-alpha.1 help` checks explicit-selector parsing but may download the named release
   - do not use the selector walkthrough against a production data directory unless the download is intended
