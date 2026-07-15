@@ -140,10 +140,11 @@ fn log_background_update_results(results: BackgroundUpdateResults) {
         Ok(WrapperUpdateStatus::Updated { from, to }) => {
             log::info!("updated Midas Lex wrapper from v{from} to {to}");
         }
-        Ok(WrapperUpdateStatus::SkippedWindows) => {
-            log::info!(
-                "automatic wrapper update is unavailable on Windows; run `cargo install midas-lex --force` after Midas Lex exits"
-            );
+        Ok(WrapperUpdateStatus::WindowsReinstallRequired {
+            current_exe,
+            release_tag,
+        }) => {
+            log::warn!("{}", windows_reinstall_notice(&current_exe, &release_tag));
         }
         Ok(WrapperUpdateStatus::SkippedUnofficialRepository) => {
             log::info!(
@@ -155,6 +156,13 @@ fn log_background_update_results(results: BackgroundUpdateResults) {
     if let Err(err) = results.runtime {
         log::warn!("automatic runtime update failed: {err}");
     }
+}
+
+fn windows_reinstall_notice(current_exe: &Path, release_tag: &str) -> String {
+    format!(
+        "a newer Midas Lex wrapper {release_tag} is available, but the running Windows executable `{}` cannot be replaced safely; after Midas Lex exits, run `cargo install midas-lex --force`",
+        current_exe.display()
+    )
 }
 
 fn maybe_spawn_background_update(target: &Target, config: &Config) -> MidasLexResult<()> {
@@ -880,9 +888,17 @@ impl ReleaseClient {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum WrapperUpdateStatus {
-    Current { version: Version },
-    Updated { from: Version, to: String },
-    SkippedWindows,
+    Current {
+        version: Version,
+    },
+    Updated {
+        from: Version,
+        to: String,
+    },
+    WindowsReinstallRequired {
+        current_exe: PathBuf,
+        release_tag: String,
+    },
     SkippedUnofficialRepository,
 }
 
@@ -894,40 +910,83 @@ fn update_current_wrapper_from_release(
     if release_repo != DEFAULT_RELEASE_REPO {
         return Ok(WrapperUpdateStatus::SkippedUnofficialRepository);
     }
-    if target.wrapper_update_support()? == WrapperUpdateSupport::RunningWindowsExe {
-        return Ok(WrapperUpdateStatus::SkippedWindows);
-    }
+    let current_version = Version::parse(env!("CARGO_PKG_VERSION"))?;
+    let Some(release_version) = newer_wrapper_release_version(release, &current_version)? else {
+        return Ok(WrapperUpdateStatus::Current {
+            version: current_version,
+        });
+    };
+    let current_exe = resolve_running_wrapper_path()?;
+    update_newer_wrapper_from_release(
+        release,
+        target,
+        &current_exe,
+        &current_version,
+        &release_version,
+    )
+}
+
+fn resolve_running_wrapper_path() -> MidasLexResult<PathBuf> {
     let current_exe = env::current_exe().map_err(|err| {
         error(format!(
             "cannot resolve the running wrapper executable: {err}"
         ))
     })?;
-    let current_exe = fs::canonicalize(&current_exe).map_err(|err| {
+    fs::canonicalize(&current_exe).map_err(|err| {
         error(format!(
             "cannot resolve the running wrapper executable {}: {err}",
             current_exe.display()
         ))
-    })?;
-    let current_version = Version::parse(env!("CARGO_PKG_VERSION"))?;
-    update_wrapper_from_release(release, target, &current_exe, &current_version)
+    })
 }
 
+#[cfg(test)]
 fn update_wrapper_from_release(
     release: &Release,
     target: &Target,
     current_exe: &Path,
     current_version: &Version,
 ) -> MidasLexResult<WrapperUpdateStatus> {
-    if target.wrapper_update_support()? == WrapperUpdateSupport::RunningWindowsExe {
-        return Ok(WrapperUpdateStatus::SkippedWindows);
-    }
+    let Some(release_version) = newer_wrapper_release_version(release, current_version)? else {
+        return Ok(WrapperUpdateStatus::Current {
+            version: current_version.clone(),
+        });
+    };
+    update_newer_wrapper_from_release(
+        release,
+        target,
+        current_exe,
+        current_version,
+        &release_version,
+    )
+}
+
+fn newer_wrapper_release_version(
+    release: &Release,
+    current_version: &Version,
+) -> MidasLexResult<Option<Version>> {
     if release.draft {
         return Err(error("automatic wrapper update refuses draft releases"));
     }
     let release_version = parse_tag_version(&release.tag_name)?;
     if release_version <= *current_version {
-        return Ok(WrapperUpdateStatus::Current {
-            version: current_version.clone(),
+        return Ok(None);
+    }
+    Ok(Some(release_version))
+}
+
+fn update_newer_wrapper_from_release(
+    release: &Release,
+    target: &Target,
+    current_exe: &Path,
+    current_version: &Version,
+    release_version: &Version,
+) -> MidasLexResult<WrapperUpdateStatus> {
+    debug_assert!(release_version > current_version);
+    if target.wrapper_update_support()? == WrapperUpdateSupport::RunningWindowsExe {
+        return Ok(WrapperUpdateStatus::WindowsReinstallRequired {
+            current_exe: current_exe.to_path_buf(),
+            release_tag: release.tag_name.clone(),
         });
     }
     let asset_name = target.wrapper_asset_name(&release.tag_name);
@@ -2035,7 +2094,8 @@ mod tests {
     }
 
     #[test]
-    fn automatic_wrapper_update_skips_windows_without_downloading() {
+    fn windows_newer_release_notice_contains_running_path_and_recovery() {
+        let current_exe = PathBuf::from(r"D:\custom tools\midas-lex.exe");
         for target in [
             Target {
                 triple: "x86_64-pc-windows-msvc",
@@ -2047,40 +2107,104 @@ mod tests {
             },
         ] {
             let status = update_wrapper_from_release(
-                &test_release("v0.0.2-beta.1", false),
+                &test_pre_release("v0.0.1-beta.3"),
                 &target,
-                Path::new("midas-lex.exe"),
-                &Version::parse("0.0.1-beta.1").unwrap(),
+                &current_exe,
+                &Version::parse("0.0.1-beta.2").unwrap(),
             )
             .unwrap();
-            assert_eq!(status, WrapperUpdateStatus::SkippedWindows);
-            let status = update_current_wrapper_from_release(
-                &test_release("v0.0.2-beta.1", false),
-                &target,
-                DEFAULT_RELEASE_REPO,
-            )
-            .unwrap();
-            assert_eq!(status, WrapperUpdateStatus::SkippedWindows);
+            assert_eq!(
+                status,
+                WrapperUpdateStatus::WindowsReinstallRequired {
+                    current_exe: current_exe.clone(),
+                    release_tag: "v0.0.1-beta.3".to_string(),
+                }
+            );
+            let notice = windows_reinstall_notice(&current_exe, "v0.0.1-beta.3");
+            assert!(notice.contains(&current_exe.display().to_string()));
+            assert!(notice.contains("cannot be replaced safely"));
+            assert!(notice.contains("cargo install midas-lex --force"));
         }
     }
 
     #[test]
-    fn automatic_wrapper_update_does_not_replace_with_same_or_older_release() {
-        let target = test_target();
-        for tag in ["v0.0.1-beta.1", "v0.0.1-beta.0"] {
+    fn windows_equal_or_newer_local_version_does_not_prompt_or_download() {
+        let target = Target {
+            triple: "x86_64-pc-windows-msvc",
+            exe_name: "midas-lex.exe",
+        };
+        for (release_tag, current) in [
+            ("v0.0.1-beta.2", "0.0.1-beta.2"),
+            ("v0.0.1-beta.1", "0.0.1-beta.2"),
+            ("v0.0.1-beta.2", "0.0.2-dev.1"),
+        ] {
+            let current = Version::parse(current).unwrap();
             assert_eq!(
                 update_wrapper_from_release(
-                    &test_pre_release(tag),
+                    &test_pre_release(release_tag),
                     &target,
                     Path::new("path-is-not-read"),
-                    &Version::parse("0.0.1-beta.1").unwrap(),
+                    &current,
                 )
                 .unwrap(),
-                WrapperUpdateStatus::Current {
-                    version: Version::parse("0.0.1-beta.1").unwrap()
-                }
+                WrapperUpdateStatus::Current { version: current }
             );
         }
+    }
+
+    #[test]
+    fn windows_validates_release_before_reinstall_notice() {
+        let target = Target {
+            triple: "x86_64-pc-windows-msvc",
+            exe_name: "midas-lex.exe",
+        };
+        let current = Version::parse("0.0.1-beta.2").unwrap();
+        let err = update_wrapper_from_release(
+            &test_release("v0.0.1-beta.3", true),
+            &target,
+            Path::new("midas-lex.exe"),
+            &current,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("draft"));
+        assert!(
+            update_wrapper_from_release(
+                &test_release("not-a-version", false),
+                &target,
+                Path::new("midas-lex.exe"),
+                &current,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn current_wrapper_path_comes_from_the_running_process() {
+        let expected = fs::canonicalize(env::current_exe().unwrap()).unwrap();
+        assert_eq!(resolve_running_wrapper_path().unwrap(), expected);
+    }
+
+    #[test]
+    fn automatic_windows_notice_uses_resolved_running_path() {
+        let current = Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
+        let newer = Version::new(current.major, current.minor, current.patch + 1);
+        let release = test_release(&format!("v{newer}"), false);
+        let target = Target {
+            triple: "x86_64-pc-windows-msvc",
+            exe_name: "midas-lex.exe",
+        };
+        let expected = resolve_running_wrapper_path().unwrap();
+        let status =
+            update_current_wrapper_from_release(&release, &target, DEFAULT_RELEASE_REPO).unwrap();
+        let WrapperUpdateStatus::WindowsReinstallRequired {
+            current_exe,
+            release_tag,
+        } = status
+        else {
+            panic!("expected Windows reinstall notice");
+        };
+        assert_eq!(current_exe, expected);
+        assert_eq!(release_tag, format!("v{newer}"));
     }
 
     #[test]
@@ -2325,6 +2449,7 @@ mod tests {
         ]);
     }
 
+    #[cfg(unix)]
     fn assert_no_wrapper_update_stage(dir: &Path) {
         assert!(!fs::read_dir(dir).unwrap().any(|entry| {
             entry

@@ -50,17 +50,19 @@ reserved by the wrapper: for example, `+self-update` passes to the runtime
 unchanged.
 
 Automatic wrapper replacement accepts assets only from the official
-`MidasAl/midas-lex` repository. A same or older wrapper version is left
-unchanged. Linux and macOS resolve the running executable instead of searching
+`MidasAl/midas-lex` repository. Release validity and semantic version comparison
+happen first; a same or older release causes no wrapper download or Windows
+notice. Linux and macOS resolve the running executable instead of searching
 `PATH`, require the canonical public wrapper asset and its exact one-line
 same-name SHA-256 record, stage beside the executable, preserve its mode, sync,
 and atomically rename. An adjacent lock and executable digest rechecks serialize
 replacement; errors before rename remove staging and preserve the old wrapper.
 
-A running Windows `.exe` is not replaced. Windows continues the automatic
-runtime check and logs the wrapper skip at the opt-in information level; update
-the wrapper after Midas Lex exits with `cargo install midas-lex --force`.
-Wrapper or runtime update failures are warnings from the background child and do
+A running Windows `.exe` is not replaced. Only when the release is newer, the
+background child visibly warns that replacement is unsafe, names the canonical
+path reported by the executing process, and asks the user to run
+`cargo install midas-lex --force` after Midas Lex exits. Windows continues the
+automatic runtime check. Wrapper or runtime update failures and the notice do
 not change the current runtime command's result.
 
 Runtime downloads and installs use one lock per data directory. The lock file is

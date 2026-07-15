@@ -71,9 +71,12 @@ explicit version selectors also keep their existing direct behavior.
 
 On Linux and macOS, a newer wrapper is verified against its exact same-name
 SHA-256 record, staged beside the resolved running executable, and atomically
-renamed over that path with its executable mode preserved. On Windows, automatic
-runtime updates continue but running-wrapper replacement is skipped; use
-`cargo install midas-lex --force` after Midas Lex exits to update the wrapper.
+renamed over that path with its executable mode preserved. An equal or older
+release causes no wrapper download or notice, including when a local build is
+newer. On Windows, only a newer release produces a visible background warning;
+it names the canonical path of the running `.exe` and asks the user to run
+`cargo install midas-lex --force` after Midas Lex exits. Automatic runtime
+updates and the current command continue normally.
 
 ## Releases
 

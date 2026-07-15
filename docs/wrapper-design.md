@@ -54,7 +54,9 @@ wrapper design
   - Linux and macOS resolve the running executable, stage beside it, verify the exact one-line checksum record, preserve its mode, sync, and atomically rename
   - an adjacent file lock serializes updates; the running executable digest is checked before and after waiting and again before rename
   - ordinary errors delete the staged file and preserve the installed wrapper
-  - Windows retains wrapper release assets, skips running `.exe` replacement without failing the current runtime, and directs users to `cargo install midas-lex --force`
+  - release validity and semantic version comparison precede path resolution and platform handling; equal or older releases cause no download or notice
+  - only a newer Windows release produces a normal warning naming the canonical running `.exe` path and directing users to `cargo install midas-lex --force`
+  - the Windows warning and skipped replacement do not fail the current runtime or stop its independent update check
 
 - safe local walkthrough
   - `cargo test` exercises selector and pass-through parsing, first-run policy, release ordering, data-directory selection, timer, marker, locks, independent update failures, checksum cleanup, atomic replacement, permissions, and platform handling
