@@ -58,6 +58,32 @@ release, including alpha, beta, and release-candidate tags.
 Set `MIDAS_LEX_VERUS_VERBOSE=1` to show the selected runtime version tag and
 binary path. Set `MIDAS_LEX_VERUS_LOG=info` to show download and update logs.
 
+## Update the wrapper
+
+```sh
+midas-lex +self-update
+midas-lex +self-update --help
+```
+
+`+self-update` is a wrapper-only leading command. It accepts no version selector
+or runtime arguments. It selects the newest non-draft stable release from the
+official `MidasAl/midas-lex` repository, or the newest non-draft pre-release when
+no stable release exists. It downloads only the public wrapper asset for the
+current target and its same-name `.sha256` file.
+
+On Linux and macOS, the command verifies the checksum, stages the replacement
+beside the running wrapper, preserves its executable mode, and atomically renames
+the verified file over that exact executable. It never chooses another binary
+from `PATH`. Concurrent updates serialize on a lock beside the executable and
+abort if its on-disk contents changed while waiting. Ordinary failures remove the
+staged file and leave the wrapper unchanged. A permissions error requires write
+access to the wrapper's directory or a reinstall with
+`cargo install midas-lex --force`.
+
+Windows does not permit this command to replace its running `.exe`. The command
+exits without downloading or changing a file and directs the user to run
+`cargo install midas-lex --force` after it exits.
+
 ## Releases
 
 The wrapper downloads runtime assets from GitHub Releases using this pattern:

@@ -13,6 +13,8 @@ wrapper design
   - `midas-lex +v0.0.1-alpha.1 ...` selects an exact installed or downloadable release
   - `midas-lex +prerelease ...` selects the newest non-draft semver release, including pre-release tags
   - explicit `+prerelease` selection is the only latest pre-release opt-in path
+  - `midas-lex +self-update` is the only wrapper-owned user command and accepts no selector or runtime arguments
+  - `midas-lex +self-update --help` prints its wrapper-owned help without resolving a runtime
   - all other arguments are passed to the real binary unchanged
   - environment variables are inherited by the real binary
 - install path
@@ -45,9 +47,16 @@ wrapper design
   - each binary asset has a same-name `.sha256` asset
   - checksum mismatch stops installation
   - partially downloaded files are never executed
+- wrapper self-update
+  - release selection reuses the default stable-preferred, non-draft semantic-version lookup against only `MidasAl/midas-lex`
+  - the selected asset is `midas-lex-VERSION-TARGET[.exe]`; runtime asset selection remains unchanged
+  - Linux and macOS resolve the running executable, stage beside it, verify the exact one-line checksum record, preserve its mode, sync, and atomically rename
+  - an adjacent file lock serializes updates; the running executable digest is checked before and after waiting and again before rename
+  - ordinary errors delete the staged file and preserve the installed wrapper
+  - Windows retains wrapper release assets but rejects in-place replacement before download and directs users to `cargo install midas-lex --force`
 
 - safe local walkthrough
-  - `cargo test` exercises selector parsing, release ordering, data-directory selection, timer, marker, lock, and checksum behavior
+  - `cargo test` exercises selector and self-update parsing, release ordering, data-directory selection, timer, marker, locks, checksum failures, atomic replacement, permissions, and platform handling
   - `cargo run -- help` checks the real wrapper command path and may download a runtime when none is installed
   - `MIDAS_LEX_VERUS_HOME=/tmp/midas-lex-doc-check cargo run -- +v0.0.1-alpha.1 help` checks explicit-selector parsing but may download the named release
   - do not use the selector walkthrough against a production data directory unless the download is intended
