@@ -71,7 +71,6 @@ Commands:
   next-stage  Get guidance on what to do next given your circumstances
   docs        Get guidance for specific Verus, spec, and proof topics
   profile     Show, set, or check the Cargo.toml guidance filter
-  setup       Install and validate Midas Lex, Rust, and Verus
   eula        Print the EULA notice
   help        Print this message or the help of the given subcommand(s)
 ```
