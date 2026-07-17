@@ -2,7 +2,7 @@
 
 **Trust infrastructure for robotics.**
 
-Midas Lex guides coding agents through the formal verification of Rust software using Verus. It transforms intended behavior into specifications, proof obligations, repairs, and verifier-checked code—helping robotics teams prevent unsafe interfaces, invalid assumptions, configuration errors, and failures before deployment.
+Midas Lex guides coding agents through the formal verification of Rust software using Verus. It transforms intended behavior into specifications, proof obligations, repairs, and verifier-checked code by helping robotics teams prevent unsafe interfaces, invalid assumptions, configuration errors, and failures before deployment.
 
 Rust makes individual components safer through memory safety, strong types, and predictable performance. Midas Lex extends those guarantees across robotics infrastructure by making configurations, interfaces, assumptions, and system behavior verifiable.
 
