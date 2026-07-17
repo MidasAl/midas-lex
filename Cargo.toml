@@ -1,10 +1,10 @@
 [package]
 name = "midas-lex"
-version = "0.0.1-beta.2"
+version = "0.0.1"
 edition = "2024"
 license = "MPL-2.0"
 repository = "https://github.com/MidasAl/midas-lex"
-description = "Midas Lex command launcher"
+description = "Launcher for Midas Lex CLI: coding agent guidance to formally verify Rust software"
 readme = "README.md"
 include = [
     "Cargo.lock",

@@ -90,7 +90,7 @@ Downloads and installs use one lock per data directory. The lock file is
 Use a version selector to opt in to a specific release, including pre-release:
 
 ```sh
-midas-lex +v0.0.1-beta.2 next-stage
+midas-lex +v0.0.1 next-stage
 midas-lex +prerelease next-stage
 ```
 
