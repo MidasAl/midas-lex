@@ -3,23 +3,28 @@
 **Trust infrastructure for robotics.**
 
 The `midas-lex` CLI guides coding agents through the formal verification of
-Rust software using [Verus](https://github.com/verus-lang/verus), a language
-that builds on Rust and checks code against formal specifications. With proof
-annotations, Verus determines whether the code satisfies the specification.
+Rust software using [Verus](https://github.com/verus-lang/verus),
+a language that builds on Rust and checks code against formal specifications.
+With proof annotations, Verus determines whether
+the code satisfies the specification.
 When the verifier passes, you have high confidence that the code is correct if
 the specification is correct.
+
+**Agents already code fast; with Verus and Midas Lex,
+they can code correctly.**
 
 ## Why Verus + Agents
 
 Rust makes individual components safer through memory safety, strong types, and
-predictable performance. Midas Lex extends those guarantees across robotics
-infrastructure by making configurations, interfaces, assumptions, and system
-behavior verifiable, helping teams prevent failures before deployment.
+predictable performance.
+Midas Lex extends those guarantees across robotics infrastructure by
+making configurations, interfaces, assumptions, and system behavior verifiable,
+helping teams prevent failures before deployment.
 
 With Midas Lex, humans express program behavior in English and focus on
-high-level design and declarative specifications. Agents write Verus
-specifications, Rust code, and proofs that the code satisfies those
-specifications.
+high-level design and declarative specifications.
+Agents write Verus specifications, Rust code, and proofs that
+the code satisfies those specifications.
 
 > **Agents supply velocity. Verus supplies correctness. Midas Lex connects them.**
 
