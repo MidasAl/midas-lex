@@ -57,12 +57,19 @@ Use `midas-lex` for guidance.
 
 That's it!
 
+Midas Lex first maps each English requirement to its public executable path,
+contract, abstract state transition, and verifier-checked refinement evidence.
+It keeps unresolved or helper-only work visible, bounds repeated proof attempts,
+and calls for independent semantic review before completion. Agents keep the
+working goal and stage record in task-owned ephemeral state, not generated
+files committed to your project.
+
 ## Usage Details
 
 ```sh
 midas-lex help
 
-Midas Lex Helper provides end-to-end guidance for software development in Verus.
+Midas Lex Helper provides end-to-end guidance for software development in Verus, from English requirements to verifier-checked public behavior.
 By using midas-lex, you agree to our EULA per `midas-lex eula`.
 
 Usage: midas-lex [COMMAND]
