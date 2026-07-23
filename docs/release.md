@@ -31,6 +31,24 @@ midas-lex +prerelease docs
 `+vVERSION` selectors run an exact release tag. `+prerelease` allows the newest
 non-draft semver release, including alpha, beta, and release-candidate tags.
 
+The wrapper also reads persistent version selection from these scopes, in order:
+
+1. a leading `+vVERSION` or `+prerelease` command-line selector
+2. `[workspace.metadata.midas_lex]`, or `[package.metadata.midas_lex]` when the
+   workspace table is absent
+3. `config.toml` at the active Midas Lex data-directory root
+4. the ordinary stable-preferred default
+
+Cargo metadata and the root file accept `version = "SEMVER"` or
+`prerelease = true`. A project can use `prerelease = false` to restore the
+ordinary default even when the root file selects a version. The wrapper ignores
+absent project metadata and unavailable Cargo metadata, preserving use outside
+Cargo projects. Present malformed configuration, unknown keys, invalid semantic
+versions, and `version` combined with `prerelease = true` are errors.
+
+The root `config.toml` is outside the wrapper-managed `toolchains`, `checksums`,
+`downloads`, and `locks` paths. Installs and updates do not rewrite it.
+
 Set `MIDAS_LEX_VERUS_VERBOSE=1` to show the selected runtime version tag and
 binary path. Set `MIDAS_LEX_VERUS_LOG=info` to show download and update logs.
 
@@ -44,9 +62,9 @@ for both wrapper and runtime checks. The running command keeps using the runtime
 it already started.
 
 The first invocation installs and starts the selected latest runtime without a
-background check. Explicit `+vVERSION` and `+prerelease` invocations also retain
-their direct behavior without an automatic check. No other leading `+` token is
-reserved by the wrapper: for example, `+self-update` passes to the runtime
+background check. Any command-line or configured version selection retains the
+direct selector behavior without an automatic check. No other leading `+` token
+is reserved by the wrapper: for example, `+self-update` passes to the runtime
 unchanged.
 
 Automatic wrapper replacement accepts assets only from the official
@@ -71,10 +89,11 @@ the active default data directory's `locks/install.lock` when
 `MIDAS_LEX_VERUS_HOME` is not set. Other wrapper processes using the same data
 directory wait for that lock before installing a runtime.
 
-`cargo test` covers pass-through, first-run policy, release ordering, the timer,
-marker and locks, independent wrapper/runtime failures, checksum cleanup, atomic
-replacement, permissions, and platform behavior without publication or an
-uncontrolled network.
+`cargo test` covers configuration precedence, invalid input, persistence,
+pass-through, first-run policy, release ordering, the timer, marker and locks,
+independent wrapper/runtime failures, checksum cleanup, atomic replacement,
+permissions, and platform behavior without publication or an uncontrolled
+network.
 
 ## Release assets
 

@@ -12,9 +12,18 @@ wrapper design
   - a first run with no installed runtime installs the selected latest release before starting it, so no background update child is needed for that invocation
   - `midas-lex +v0.0.1-alpha.1 ...` selects an exact installed or downloadable release
   - `midas-lex +prerelease ...` selects the newest non-draft semver release, including pre-release tags
-  - explicit `+prerelease` selection is the only latest pre-release opt-in path
+  - configured version selection has the same direct behavior as a command-line selector
   - all other arguments, including unrecognized leading `+` tokens, are passed to the real binary unchanged
   - environment variables are inherited by the real binary
+- configuration
+  - selector precedence is command line, Cargo workspace or package metadata, root config, ordinary default
+  - `[workspace.metadata.midas_lex]` wins when present; otherwise the current `[package.metadata.midas_lex]` is used
+  - Cargo lookup failure means no project configuration, preserving non-Cargo use
+  - `config.toml` at the active data-directory root supplies persistent global configuration
+  - Cargo metadata and root config accept exact `version` or boolean `prerelease`
+  - project `prerelease = false` suppresses a global selection
+  - malformed or unknown input, invalid semver, and conflicting selectors are errors
+  - wrapper-managed paths do not overlap or rewrite root `config.toml`
 - install path
   - `MIDAS_LEX_VERUS_HOME` overrides storage
   - `XDG_DATA_HOME` changes default storage to `$XDG_DATA_HOME/midas-lex/verus`
@@ -59,7 +68,7 @@ wrapper design
   - the Windows warning and skipped replacement do not fail the current runtime or stop its independent update check
 
 - safe local walkthrough
-  - `cargo test` exercises selector and pass-through parsing, first-run policy, release ordering, data-directory selection, timer, marker, locks, independent update failures, checksum cleanup, atomic replacement, permissions, and platform handling
+  - `cargo test` exercises configuration precedence and persistence, selector and pass-through parsing, first-run policy, release ordering, data-directory selection, timer, marker, locks, independent update failures, checksum cleanup, atomic replacement, permissions, and platform handling
   - `cargo run -- help` checks the real wrapper command path and may download a runtime when none is installed
   - `MIDAS_LEX_VERUS_HOME=/tmp/midas-lex-doc-check cargo run -- +v0.0.1-alpha.1 help` checks explicit-selector parsing but may download the named release
   - do not use the selector walkthrough against a production data directory unless the download is intended

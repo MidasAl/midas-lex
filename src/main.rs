@@ -21,6 +21,8 @@ const INSTALL_HOME_ENV: &str = "MIDAS_LEX_VERUS_HOME";
 const RELEASE_REPO_ENV: &str = "MIDAS_LEX_VERUS_RELEASE_REPOSITORY";
 const VERBOSE_ENV: &str = "MIDAS_LEX_VERUS_VERBOSE";
 const LOG_ENV: &str = "MIDAS_LEX_VERUS_LOG";
+const CONFIG_FILE: &str = "config.toml";
+const CARGO_METADATA_KEY: &str = "midas_lex";
 const BACKGROUND_UPDATE_EXE_ENV: &str = "MIDAS_LEX_VERUS_WRAPPER_BACKGROUND_UPDATE_EXE";
 const BACKGROUND_UPDATE_MARKER_ENV: &str = "MIDAS_LEX_VERUS_WRAPPER_BACKGROUND_UPDATE_MARKER";
 const WRAPPER_UPDATE_LOCK_FILE: &str = ".midas-lex-self-update.lock";
@@ -47,7 +49,17 @@ fn run(args: Vec<OsString>) -> MidasLexResult<ExitCode> {
     let config = Config::from_env()?;
     let target = Target::current()?;
     let install = InstallStore::new(config.install_home.clone());
-    let (selector, real_args) = parse_version_selector(args)?;
+    let (cli_selector, real_args) = parse_version_selector(args)?;
+    let project_version_preference = if cli_selector.is_some() {
+        None
+    } else {
+        load_cargo_version_preference()?
+    };
+    let selector = resolve_version_selector(
+        cli_selector,
+        project_version_preference,
+        config.global_version_preference.clone(),
+    );
     let installed_default = if selector.is_none() {
         install.latest_installed(&target)?
     } else {
@@ -295,6 +307,7 @@ struct Config {
     install_home: PathBuf,
     release_repo: String,
     verbose: bool,
+    global_version_preference: Option<VersionPreference>,
 }
 
 impl Config {
@@ -305,16 +318,177 @@ impl Config {
         };
         let release_repo = configured_release_repo();
         let verbose = env_bool(VERBOSE_ENV);
+        let global_version_preference = load_global_version_preference(&install_home)?;
         Ok(Self {
             install_home,
             release_repo,
             verbose,
+            global_version_preference,
         })
     }
 }
 
 fn configured_release_repo() -> String {
     env::var(RELEASE_REPO_ENV).unwrap_or_else(|_| DEFAULT_RELEASE_REPO.to_string())
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VersionSettings {
+    version: Option<String>,
+    prerelease: Option<bool>,
+}
+
+impl VersionSettings {
+    fn preference(&self, source: &str) -> MidasLexResult<Option<VersionPreference>> {
+        if self.version.is_some() && self.prerelease == Some(true) {
+            return Err(error(format!(
+                "invalid Midas Lex version selection in {source}: `version` and `prerelease = true` cannot be combined"
+            )));
+        }
+        if let Some(raw) = &self.version {
+            let raw = raw.strip_prefix('v').unwrap_or(raw);
+            let version = Version::parse(raw)
+                .map_err(|err| error(format!("invalid Midas Lex `version` in {source}: {err}")))?;
+            return Ok(Some(VersionPreference::Exact {
+                tag: format!("v{version}"),
+                version,
+            }));
+        }
+        Ok(self.prerelease.map(|enabled| {
+            if enabled {
+                VersionPreference::Prerelease
+            } else {
+                VersionPreference::Default
+            }
+        }))
+    }
+}
+
+fn load_global_version_preference(
+    install_home: &Path,
+) -> MidasLexResult<Option<VersionPreference>> {
+    let path = install_home.join(CONFIG_FILE);
+    let source = match fs::read(&path) {
+        Ok(source) => source,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(error(format!(
+                "failed to read Midas Lex config {}: {err}",
+                path.display()
+            )));
+        }
+    };
+    if source.len() as u64 > MAX_TEXT_BYTES {
+        return Err(error(format!(
+            "Midas Lex config {} exceeds {MAX_TEXT_BYTES} bytes",
+            path.display()
+        )));
+    }
+    let source = String::from_utf8(source).map_err(|err| {
+        error(format!(
+            "Midas Lex config {} is not UTF-8: {err}",
+            path.display()
+        ))
+    })?;
+    let settings: VersionSettings = toml::from_str(&source).map_err(|err| {
+        error(format!(
+            "failed to parse Midas Lex config {}: {err}",
+            path.display()
+        ))
+    })?;
+    settings.preference(&format!("`{}`", path.display()))
+}
+
+#[derive(Deserialize)]
+struct CargoProjectMetadata {
+    #[serde(default)]
+    workspace_metadata: serde_json::Value,
+    #[serde(default)]
+    packages: Vec<CargoPackageMetadata>,
+}
+
+#[derive(Deserialize)]
+struct CargoPackageMetadata {
+    manifest_path: PathBuf,
+    #[serde(default)]
+    metadata: serde_json::Value,
+}
+
+fn load_cargo_version_preference() -> MidasLexResult<Option<VersionPreference>> {
+    let output = match Command::new("cargo")
+        .args(["metadata", "--no-deps", "--format-version", "1"])
+        .output()
+    {
+        Ok(output) => output,
+        Err(err) => {
+            log::info!(
+                "ignoring Cargo.toml version selection: failed to run `cargo metadata`: {err}"
+            );
+            return Ok(None);
+        }
+    };
+    if !output.status.success() {
+        log::info!(
+            "ignoring Cargo.toml version selection because `cargo metadata` failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+        return Ok(None);
+    }
+    let metadata: CargoProjectMetadata = serde_json::from_slice(&output.stdout)
+        .map_err(|err| error(format!("invalid `cargo metadata` output: {err}")))?;
+    let output = match Command::new("cargo")
+        .args(["locate-project", "--message-format", "plain"])
+        .output()
+    {
+        Ok(output) => output,
+        Err(err) => {
+            log::info!(
+                "ignoring Cargo.toml version selection: failed to run `cargo locate-project`: {err}"
+            );
+            return Ok(None);
+        }
+    };
+    if !output.status.success() {
+        log::info!(
+            "ignoring Cargo.toml version selection because `cargo locate-project` failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+        return Ok(None);
+    }
+    let manifest_path = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+    version_preference_from_cargo_metadata(&metadata, &manifest_path)
+}
+
+fn version_preference_from_cargo_metadata(
+    metadata: &CargoProjectMetadata,
+    manifest_path: &Path,
+) -> MidasLexResult<Option<VersionPreference>> {
+    if let Some(settings) = version_settings_from_metadata(&metadata.workspace_metadata)? {
+        return settings.preference("`workspace.metadata.midas_lex`");
+    }
+    let Some(package) = metadata
+        .packages
+        .iter()
+        .find(|package| package.manifest_path == manifest_path)
+    else {
+        return Ok(None);
+    };
+    let Some(settings) = version_settings_from_metadata(&package.metadata)? else {
+        return Ok(None);
+    };
+    settings.preference("`package.metadata.midas_lex`")
+}
+
+fn version_settings_from_metadata(
+    metadata: &serde_json::Value,
+) -> MidasLexResult<Option<VersionSettings>> {
+    let Some(settings) = metadata.get(CARGO_METADATA_KEY) else {
+        return Ok(None);
+    };
+    serde_json::from_value(settings.clone())
+        .map(Some)
+        .map_err(|err| error(format!("invalid Cargo.toml `midas_lex` metadata: {err}")))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -430,6 +604,36 @@ fn current_target() -> Option<Target> {
 enum VersionSelector {
     Exact { tag: String, version: Version },
     Prerelease,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum VersionPreference {
+    Default,
+    Exact { tag: String, version: Version },
+    Prerelease,
+}
+
+impl VersionPreference {
+    fn into_selector(self) -> Option<VersionSelector> {
+        match self {
+            Self::Default => None,
+            Self::Exact { tag, version } => Some(VersionSelector::Exact { tag, version }),
+            Self::Prerelease => Some(VersionSelector::Prerelease),
+        }
+    }
+}
+
+fn resolve_version_selector(
+    cli: Option<VersionSelector>,
+    project: Option<VersionPreference>,
+    global: Option<VersionPreference>,
+) -> Option<VersionSelector> {
+    match cli {
+        Some(selector) => Some(selector),
+        None => project
+            .or(global)
+            .and_then(VersionPreference::into_selector),
+    }
 }
 
 fn parse_version_selector(
@@ -1576,6 +1780,197 @@ mod tests {
         let (selector, remaining) = parse_version_selector(args).unwrap();
         assert_eq!(selector, Some(VersionSelector::Prerelease));
         assert_eq!(remaining, vec![OsString::from("docs")]);
+    }
+
+    #[test]
+    fn configured_version_accepts_semver_with_optional_tag_prefix() {
+        for raw in ["0.0.2-beta.1", "v0.0.2-beta.1"] {
+            let preference = VersionSettings {
+                version: Some(raw.to_string()),
+                prerelease: None,
+            }
+            .preference("test config")
+            .unwrap();
+            assert_eq!(
+                preference,
+                Some(VersionPreference::Exact {
+                    tag: "v0.0.2-beta.1".to_string(),
+                    version: Version::parse("0.0.2-beta.1").unwrap(),
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn configured_version_rejects_invalid_and_conflicting_values() {
+        let invalid = VersionSettings {
+            version: Some("latest".to_string()),
+            prerelease: None,
+        }
+        .preference("test config")
+        .unwrap_err();
+        assert!(invalid.to_string().contains("invalid Midas Lex `version`"));
+
+        let conflicting = VersionSettings {
+            version: Some("0.0.2".to_string()),
+            prerelease: Some(true),
+        }
+        .preference("test config")
+        .unwrap_err();
+        assert!(conflicting.to_string().contains("cannot be combined"));
+
+        let unknown = toml::from_str::<VersionSettings>("channel = \"beta\"").unwrap_err();
+        assert!(unknown.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn version_selection_precedence_is_cli_project_global_default() {
+        let cli = VersionSelector::Exact {
+            tag: "v0.0.2-beta.2".to_string(),
+            version: Version::parse("0.0.2-beta.2").unwrap(),
+        };
+        let global = VersionPreference::Exact {
+            tag: "v0.0.1".to_string(),
+            version: Version::parse("0.0.1").unwrap(),
+        };
+        assert_eq!(
+            resolve_version_selector(
+                Some(cli.clone()),
+                Some(VersionPreference::Prerelease),
+                Some(global.clone()),
+            ),
+            Some(cli)
+        );
+        assert_eq!(
+            resolve_version_selector(
+                None,
+                Some(VersionPreference::Prerelease),
+                Some(global.clone()),
+            ),
+            Some(VersionSelector::Prerelease)
+        );
+        assert_eq!(
+            resolve_version_selector(None, Some(VersionPreference::Default), Some(global.clone())),
+            None
+        );
+        assert_eq!(
+            resolve_version_selector(None, None, Some(global.clone())),
+            global.into_selector()
+        );
+        assert_eq!(resolve_version_selector(None, None, None), None);
+    }
+
+    #[test]
+    fn cargo_workspace_selection_precedes_current_package_selection() {
+        let metadata: CargoProjectMetadata = serde_json::from_value(serde_json::json!({
+            "workspace_metadata": {
+                "midas_lex": { "prerelease": true }
+            },
+            "packages": [{
+                "manifest_path": "/workspace/member/Cargo.toml",
+                "metadata": {
+                    "midas_lex": { "version": "0.0.1" }
+                }
+            }]
+        }))
+        .unwrap();
+        let preference = version_preference_from_cargo_metadata(
+            &metadata,
+            Path::new("/workspace/member/Cargo.toml"),
+        )
+        .unwrap();
+        assert_eq!(preference, Some(VersionPreference::Prerelease));
+    }
+
+    #[test]
+    fn cargo_package_selection_and_explicit_default_are_supported() {
+        let metadata: CargoProjectMetadata = serde_json::from_value(serde_json::json!({
+            "workspace_metadata": {},
+            "packages": [{
+                "manifest_path": "/workspace/member/Cargo.toml",
+                "metadata": {
+                    "midas_lex": { "prerelease": false }
+                }
+            }]
+        }))
+        .unwrap();
+        let preference = version_preference_from_cargo_metadata(
+            &metadata,
+            Path::new("/workspace/member/Cargo.toml"),
+        )
+        .unwrap();
+        assert_eq!(preference, Some(VersionPreference::Default));
+    }
+
+    #[test]
+    fn cargo_metadata_exposes_normal_manifest_version_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/lib.rs"), "").unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            r#"[package]
+name = "midas-lex-config-test"
+version = "0.1.0"
+edition = "2024"
+
+[package.metadata.midas_lex]
+version = "0.0.2-beta.1"
+"#,
+        )
+        .unwrap();
+        let output = Command::new("cargo")
+            .args(["metadata", "--no-deps", "--format-version", "1"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let metadata: CargoProjectMetadata = serde_json::from_slice(&output.stdout).unwrap();
+        let preference =
+            version_preference_from_cargo_metadata(&metadata, &dir.path().join("Cargo.toml"))
+                .unwrap();
+        assert_eq!(
+            preference,
+            Some(VersionPreference::Exact {
+                tag: "v0.0.2-beta.1".to_string(),
+                version: Version::parse("0.0.2-beta.1").unwrap(),
+            })
+        );
+    }
+
+    #[test]
+    fn root_config_is_optional_and_remains_outside_managed_toolchains() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(load_global_version_preference(dir.path()).unwrap(), None);
+
+        let config_path = dir.path().join(CONFIG_FILE);
+        let config_source = b"version = \"0.0.2-beta.1\"\n";
+        fs::write(&config_path, config_source).unwrap();
+        let store = InstallStore::new(dir.path().to_path_buf());
+        let target = test_target();
+        write_cached_install(&store, &target, "v0.0.1", b"runtime", b"runtime");
+
+        assert_eq!(
+            load_global_version_preference(dir.path()).unwrap(),
+            Some(VersionPreference::Exact {
+                tag: "v0.0.2-beta.1".to_string(),
+                version: Version::parse("0.0.2-beta.1").unwrap(),
+            })
+        );
+        assert_eq!(fs::read(config_path).unwrap(), config_source);
+    }
+
+    #[test]
+    fn root_config_rejects_unknown_fields_and_conflicting_selectors() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join(CONFIG_FILE);
+        fs::write(&config_path, "channel = \"beta\"\n").unwrap();
+        let unknown = load_global_version_preference(dir.path()).unwrap_err();
+        assert!(unknown.to_string().contains("unknown field"));
+
+        fs::write(config_path, "version = \"0.0.2\"\nprerelease = true\n").unwrap();
+        let conflicting = load_global_version_preference(dir.path()).unwrap_err();
+        assert!(conflicting.to_string().contains("cannot be combined"));
     }
 
     #[test]

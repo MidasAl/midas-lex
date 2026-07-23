@@ -77,7 +77,7 @@ Usage: midas-lex [COMMAND]
 Commands:
   next-stage  Get guidance on what to do next given your circumstances
   docs        Get guidance for specific Verus, spec, and proof topics
-  profile     Show, set, or check the Cargo.toml guidance filter
+  profile     Show, set, or check the Cargo.toml guidance filter (usually not needed)
   eula        Print the EULA notice
   help        Print this message or the help of the given subcommand(s)
 ```
@@ -103,6 +103,34 @@ midas-lex +prerelease next-stage
 
 The `+` selector is consumed by the wrapper, so the internal Midas Lex binary receives
 the remaining arguments unchanged.
+
+To persist a selection for every project, create
+`$MIDAS_LEX_VERUS_HOME/config.toml` (or the same file under the default data
+directory):
+
+```toml
+version = "0.0.2-beta.1"
+# Or use: prerelease = true
+```
+
+To select a version for one Cargo package or workspace, use its normal metadata:
+
+```toml
+[package.metadata.midas_lex]
+version = "0.0.2-beta.1"
+# Or use: prerelease = true
+```
+
+`[workspace.metadata.midas_lex]` is also supported and takes precedence over
+package metadata. Selection precedence is a command-line `+` selector, workspace
+or package metadata, the data-directory `config.toml`, then the ordinary default.
+Within project metadata, `prerelease = false` explicitly selects the ordinary
+default and suppresses a global selection. `version` accepts a semantic version
+with an optional `v` prefix. Do not combine `version` with `prerelease = true`.
+Invalid or unknown configuration values stop the wrapper with an error.
+
+The wrapper only reads the root `config.toml`; runtime installs and updates write
+under the other data-directory paths and preserve it.
 
 Set `MIDAS_LEX_VERUS_VERBOSE=1` to show the selected runtime version tag and
 binary path. Set `MIDAS_LEX_VERUS_LOG=info` to show download and update logs.
