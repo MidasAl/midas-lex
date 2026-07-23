@@ -50,14 +50,9 @@ fn run(args: Vec<OsString>) -> MidasLexResult<ExitCode> {
     let target = Target::current()?;
     let install = InstallStore::new(config.install_home.clone());
     let (cli_selector, real_args) = parse_version_selector(args)?;
-    let project_version_preference = if cli_selector.is_some() {
-        None
-    } else {
-        load_cargo_version_preference()?
-    };
     let selector = resolve_version_selector(
         cli_selector,
-        project_version_preference,
+        load_cargo_version_preference()?,
         config.global_version_preference.clone(),
     );
     let installed_default = if selector.is_none() {
@@ -402,7 +397,7 @@ fn load_global_version_preference(
 
 #[derive(Deserialize)]
 struct CargoProjectMetadata {
-    #[serde(default)]
+    #[serde(default, rename = "metadata")]
     workspace_metadata: serde_json::Value,
     #[serde(default)]
     packages: Vec<CargoPackageMetadata>,
@@ -1863,7 +1858,7 @@ mod tests {
     #[test]
     fn cargo_workspace_selection_precedes_current_package_selection() {
         let metadata: CargoProjectMetadata = serde_json::from_value(serde_json::json!({
-            "workspace_metadata": {
+            "metadata": {
                 "midas_lex": { "prerelease": true }
             },
             "packages": [{
@@ -1885,7 +1880,7 @@ mod tests {
     #[test]
     fn cargo_package_selection_and_explicit_default_are_supported() {
         let metadata: CargoProjectMetadata = serde_json::from_value(serde_json::json!({
-            "workspace_metadata": {},
+            "metadata": {},
             "packages": [{
                 "manifest_path": "/workspace/member/Cargo.toml",
                 "metadata": {
@@ -1936,6 +1931,47 @@ version = "0.0.2-beta.1"
                 version: Version::parse("0.0.2-beta.1").unwrap(),
             })
         );
+    }
+
+    #[test]
+    fn cargo_metadata_exposes_workspace_selection_before_package_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let member = dir.path().join("member");
+        fs::create_dir_all(member.join("src")).unwrap();
+        fs::write(member.join("src/lib.rs"), "").unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            r#"[workspace]
+members = ["member"]
+resolver = "3"
+
+[workspace.metadata.midas_lex]
+prerelease = false
+"#,
+        )
+        .unwrap();
+        fs::write(
+            member.join("Cargo.toml"),
+            r#"[package]
+name = "midas-lex-workspace-config-test"
+version = "0.1.0"
+edition = "2024"
+
+[package.metadata.midas_lex]
+version = "0.0.2-beta.1"
+"#,
+        )
+        .unwrap();
+        let output = Command::new("cargo")
+            .args(["metadata", "--no-deps", "--format-version", "1"])
+            .current_dir(&member)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let metadata: CargoProjectMetadata = serde_json::from_slice(&output.stdout).unwrap();
+        let preference =
+            version_preference_from_cargo_metadata(&metadata, &member.join("Cargo.toml")).unwrap();
+        assert_eq!(preference, Some(VersionPreference::Default));
     }
 
     #[test]
