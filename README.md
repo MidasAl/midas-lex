@@ -52,7 +52,7 @@ runs the latest Midas Lex binary for your platform.
 Tell your agent:
 
 ```
-Use `midas-lex` for guidance.
+Use the `midas-lex` CLI for guidance.
 ```
 
 That's it!
