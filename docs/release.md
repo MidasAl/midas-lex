@@ -5,6 +5,9 @@ Midas Lex has two installable parts:
 - the `midas-lex` wrapper crate from crates.io
 - Midas Lex runtime binaries attached to GitHub Releases in this repository
 
+For user-facing commands to install or select stable, exact, and prerelease
+versions, see [Versions and prereleases](versions.md).
+
 Installing the crate puts the wrapper on your `PATH`. The wrapper downloads the
 runtime binary the first time you run `midas-lex`, verifies its published
 SHA-256 checksum, stores it under `MIDAS_LEX_VERUS_HOME`, and then starts it.

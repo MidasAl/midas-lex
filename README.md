@@ -47,6 +47,9 @@ and put it on your path.
 The installed `midas-lex` is a wrapper that automatically downloads and
 runs the latest Midas Lex binary for your platform.
 
+For exact versions, prereleases, update behavior, and prerelease Release-page
+instructions, see [Versions and prereleases](docs/versions.md).
+
 ## Use
 
 Tell your agent:
@@ -82,49 +85,10 @@ Commands:
   help        Print this message or the help of the given subcommand(s)
 ```
 
-The first run downloads the Midas Lex binary for your platform,
-stores the binary under `MIDAS_LEX_VERUS_HOME`, and then starts it.
-`MIDAS_LEX_VERUS_HOME` defaults to `$XDG_DATA_HOME/midas-lex/verus` when
-`XDG_DATA_HOME` is set, otherwise it defaults to `$HOME/.midas-lex/verus`.
-
-Normal invocations use the latest installed ordinary Midas Lex version.
-After starting that binary, `midas-lex` may check for a newer stable release in
-the background. Background checks are throttled to once per hour.
-
-Downloads and installs use one lock per data directory. The lock file is
-`$MIDAS_LEX_VERUS_HOME/locks/install.lock`.
-
-Use a version selector to opt in to a specific release, including pre-release:
-
-```sh
-midas-lex +v0.0.1 next-stage
-midas-lex +prerelease next-stage
-```
-
-The `+` selector is consumed by the wrapper, so the internal Midas Lex binary receives
-the remaining arguments unchanged.
-
-Set `MIDAS_LEX_VERUS_VERBOSE=1` to show the selected runtime version tag and
-binary path. Set `MIDAS_LEX_VERUS_LOG=info` to show download and update logs.
-
-## Automatic updates
-
-On a default invocation with a verified runtime already installed, the wrapper
-starts that runtime before starting one throttled background child. The child
-uses one stable-preferred, non-draft release lookup to check both the public
-wrapper and runtime for the next invocation. Network, integrity, permission, or
-replacement failures are warnings and do not change the current runtime command.
-The first run installs and starts the runtime without a background check;
-explicit version selectors also keep their existing direct behavior.
-
-On Linux and macOS, a newer wrapper is verified against its exact same-name
-SHA-256 record, staged beside the resolved running executable, and atomically
-renamed over that path with its executable mode preserved. An equal or older
-release causes no wrapper download or notice, including when a local build is
-newer. On Windows, only a newer release produces a visible background warning;
-it names the canonical path of the running `.exe` and asks the user to run
-`cargo install midas-lex --force` after Midas Lex exits. Automatic runtime
-updates and the current command continue normally.
+The first run downloads, verifies, and starts the runtime for your platform.
+Default runs prefer stable releases and may check for updates in the background.
+See [Versions and prereleases](docs/versions.md) to pin a release or opt in to
+prereleases.
 
 ## Releases
 
